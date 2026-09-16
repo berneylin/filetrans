@@ -1,0 +1,22 @@
+appId: com.filetrans.app
+productName: FileTrans
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+asar: true
+npmRebuild: false
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Network
+  maintainer: FileTrans <filetrans@example.com>
+  synopsis: SSH/SFTP 双栏文件传输客户端
+  syncDesktopName: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.utilities
