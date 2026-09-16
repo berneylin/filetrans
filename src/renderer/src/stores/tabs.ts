@@ -4,6 +4,7 @@ import type { SortKey } from '../types'
 import { errorMessage } from '../utils/errors'
 import { sortEntries } from '../utils/sort'
 import { useSites } from './sites'
+import { useTransfers } from './transfers'
 import { useVisits } from './visits'
 
 export type TabStatus = 'connecting' | 'connected' | 'disconnected'
@@ -169,8 +170,23 @@ export const useTabs = create<TabsStore>((set, get) => {
     closeTab: async (id) => {
       const tab = get().tabs.find((item) => item.id === id)
       if (tab?.sessionId) {
+        const sessionId = tab.sessionId
+        const activeGroups = useTransfers
+          .getState()
+          .groups.filter(
+            (group) =>
+              group.sessionId === sessionId &&
+              (group.status === 'active' || group.status === 'pending' || group.status === 'paused')
+          )
+        if (activeGroups.length > 0) {
+          const ok = window.confirm(
+            `该标签有 ${activeGroups.length} 个进行中的传输，关闭将取消它们。确定关闭吗？`
+          )
+          if (!ok) return
+          for (const group of activeGroups) await useTransfers.getState().cancel(group.id)
+        }
         try {
-          await window.api.sftp.disconnect(tab.sessionId)
+          await window.api.sftp.disconnect(sessionId)
         } catch {
           /* 忽略断开异常 */
         }

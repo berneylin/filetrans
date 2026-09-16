@@ -31,6 +31,9 @@ export function ConflictDialog() {
       <div className="mt-2 max-h-40 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-[12px]">
         {conflict.items.slice(0, MAX_ITEMS).map((item) => (
           <div key={item.targetPath} className="truncate" title={item.targetPath}>
+            <span className="mr-1 text-gray-500">
+              {item.type === 'directory' ? '[目录]' : item.type === 'symlink' ? '[链接]' : '[文件]'}
+            </span>
             {item.targetPath}
           </div>
         ))}
@@ -38,6 +41,11 @@ export function ConflictDialog() {
           <div className="text-gray-500">…等共 {conflict.items.length} 项</div>
         )}
       </div>
+      {resolution === 'overwrite' && conflict.items.some((item) => item.type === 'directory') && (
+        <div className="mt-2 text-[12px] text-red-600">
+          覆盖将递归删除远程同名目录及其全部内容，请确认。
+        </div>
+      )}
       <div className="mt-3 space-y-1">
         {resumeEnabled && (
           <label className="flex items-center gap-2">

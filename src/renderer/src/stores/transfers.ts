@@ -12,6 +12,7 @@ interface TransfersStore {
   groups: TransferGroup[]
   conflicts: ConflictPrompt[]
   error: string | null
+  hydrate: () => Promise<void>
   start: (
     sessionId: string,
     direction: TransferDirection,
@@ -33,6 +34,21 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
   groups: [],
   conflicts: [],
   error: null,
+
+  hydrate: async () => {
+    try {
+      const groups = await window.api.transfers.list()
+      if (groups.length > 0) set({ groups })
+    } catch {
+      /* 主进程不可用时忽略 */
+    }
+    try {
+      const conflicts = await window.api.transfers.listConflicts()
+      if (conflicts.length > 0) set({ conflicts })
+    } catch {
+      /* 忽略 */
+    }
+  },
 
   start: async (sessionId, direction, sources, targetDir) => {
     if (sources.length === 0) return

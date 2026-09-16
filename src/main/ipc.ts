@@ -15,6 +15,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   const syncs = new RsyncManager(getWebContents, sessions)
 
   app.once('before-quit', () => {
+    transfers.cancelAll()
     void syncs.killAll()
     void sessions.disconnectAll()
   })
@@ -99,6 +100,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.transferResolveConflict, (_event, id: string, resolution: ConflictResolution) =>
     transfers.resolveConflict(id, resolution)
   )
+  ipcMain.handle(IPC.transferList, () => transfers.list())
+  ipcMain.handle(IPC.transferListConflicts, () => transfers.pendingConflicts())
 
   ipcMain.handle(IPC.syncStart, (_event, req: SyncStartRequest) => syncs.start(req))
   ipcMain.handle(IPC.syncCancel, (_event, id: string) => syncs.cancel(id))

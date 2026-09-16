@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -251,3 +251,118 @@ describeMaybe('SFTP 集成: 跟随并重映射 symlink', () => {
     expect(resumedStat.mtime).toBe(Math.floor(stamp.getTime() / 1000))
   }, 120000)
 })
+
+describeMaybe('SFTP 集成: 临时文件与原子落盘', () => {
+  const send = (channel: string, payload: unknown): void => {
+    if (channel === IPC.evtHostKeyPrompt) {
+      const prompt = payload as HostKeyPrompt
+      setTimeout(() => sessions.respondHostKey(prompt.promptId, true, false), 0)
+    } else if (channel === IPC.evtConflictPrompt) {
+      const prompt = payload as ConflictPrompt
+      setTimeout(() => transfers.resolveConflict(prompt.transferId, 'overwrite'), 0)
+    }
+  }
+  const fakeWebContents = { send } as unknown as WebContents
+  const sessions = new SessionManager(() => fakeWebContents)
+  const transfers = new TransferManager(() => fakeWebContents, sessions)
+  let session: SftpSession
+  let sessionId = ''
+  let tempLocal = ''
+
+  const remoteCase = `${remoteBase}-part`
+  const remoteFile = `${remoteCase}/data.bin`
+
+  afterAll(async () => {
+    await session?.removeEntries([remoteCase]).catch(() => undefined)
+    await sessions.disconnect(sessionId).catch(() => undefined)
+    if (tempLocal) await fs.rm(tempLocal, { recursive: true, force: true })
+  })
+
+  const waitForStatus = async (id: string, timeoutMs: number): Promise<TransferGroup> => {
+    const started = Date.now()
+    for (;;) {
+      const groups = transfers.list()
+      const group = groups.find((item) => item.id === id)
+      if (group && group.status !== 'pending' && group.status !== 'active' && group.status !== 'paused') {
+        return group
+      }
+      if (Date.now() - started > timeoutMs) throw new Error('等待传输结束超时')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
+  it('上传写入临时文件并以原子重命名落到最终名', async () => {
+    tempLocal = await fs.mkdtemp(path.join(os.tmpdir(), 'filetrans-part-'))
+    const source = path.join(tempLocal, 'data.bin')
+    const content = Buffer.alloc(8 * 1024 * 1024, 7)
+    await fs.writeFile(source, content)
+
+    const info = await sessions.connect({
+      host: '127.0.0.1',
+      port,
+      username,
+      privateKeyPath: keyPath
+    })
+    sessionId = info.sessionId
+    session = sessions.get(info.sessionId)
+    await session.mkdirp(remoteCase)
+
+    const id = await transfers.start({
+      sessionId,
+      direction: 'upload',
+      sources: [source],
+      targetDir: remoteCase,
+      recursive: true,
+      options: { resume: true, retries: 0, preserveTimestamps: false, preservePermissions: false }
+    })
+    const group = await waitForStatus(id, 60000)
+    expect(group.status).toBe('done')
+    expect(await session.lexists(remoteFile)).toBe(true)
+    expect(await session.lexists(`${remoteFile}.filetrans-part`)).toBe(false)
+    const stats = await session.lstat(remoteFile)
+    expect(stats.size).toBe(content.length)
+  })
+
+  it('覆盖目录目标时递归删除后写入', async () => {
+    await session.mkdirp(remoteFile)
+    const source = path.join(tempLocal, 'data.bin')
+    const id = await transfers.start({
+      sessionId,
+      direction: 'upload',
+      sources: [source],
+      targetDir: remoteCase,
+      recursive: true,
+      options: { resume: true, retries: 0, preserveTimestamps: false, preservePermissions: false }
+    })
+    const group = await waitForStatus(id, 60000)
+    expect(group.status).toBe('done')
+    const stats = await session.lstat(remoteFile)
+    expect(stats.isFile()).toBe(true)
+    expect(stats.size).toBe(8 * 1024 * 1024)
+  })
+
+  it('下载写入临时文件并在完成后重命名', async () => {
+    const local = path.join(tempLocal, 'download.bin')
+    const id = await transfers.start({
+      sessionId,
+      direction: 'download',
+      sources: [remoteFile],
+      targetDir: tempLocal,
+      recursive: true,
+      options: { resume: true, retries: 0, preserveTimestamps: false, preservePermissions: false }
+    })
+    const group = await waitForStatus(id, 60000)
+    expect(group.status).toBe('done')
+    expect((await fs.readFile(local)).length).toBe(8 * 1024 * 1024)
+    expect(fsSyncExists(`${local}.filetrans-part`)).toBe(false)
+  })
+})
+
+function fsSyncExists(file: string): boolean {
+  try {
+    statSync(file)
+    return true
+  } catch {
+    return false
+  }
+}

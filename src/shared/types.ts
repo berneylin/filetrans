@@ -113,6 +113,7 @@ export interface TransferFileProgress {
 
 export interface TransferGroup {
   id: string
+  sessionId: string
   direction: TransferDirection
   sourceLabel: string
   targetDir: string
@@ -132,6 +133,7 @@ export interface TransferGroup {
 export interface ConflictItem {
   targetPath: string
   size: number
+  type: 'file' | 'directory' | 'symlink'
 }
 
 export interface ConflictPrompt {

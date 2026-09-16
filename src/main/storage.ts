@@ -26,18 +26,33 @@ function dataFile(name: string): string {
   return path.join(app.getPath('userData'), name)
 }
 
-async function readJson<T>(file: string, fallback: T): Promise<T> {
+async function readJson<T>(file: string, fallback: T, validate?: (value: unknown) => value is T): Promise<T> {
   try {
     const raw = await fs.readFile(file, 'utf8')
-    return JSON.parse(raw) as T
+    const parsed: unknown = JSON.parse(raw)
+    if (validate && !validate(parsed)) return fallback
+    return parsed as T
   } catch {
     return fallback
   }
 }
 
 async function writeJson(file: string, data: unknown): Promise<void> {
+  const tmp = `${file}.tmp`
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8')
+  const handle = await fs.open(tmp, 'w', 0o600)
+  try {
+    await handle.writeFile(JSON.stringify(data, null, 2), 'utf8')
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  try {
+    await fs.rename(tmp, file)
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
 }
 
 export function encryptionAvailable(): boolean {
@@ -71,12 +86,16 @@ function toPublicSite(site: StoredSite): SiteConfig {
 }
 
 export async function listSites(): Promise<SiteConfig[]> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [])
+  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+  )
   return stored.map(toPublicSite)
 }
 
 export async function saveSite(input: SiteInput): Promise<SiteConfig> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [])
+  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+  )
   const id = input.id ?? randomUUID()
   const existing = stored.find((s) => s.id === id)
   let secret = existing?.secret
@@ -104,7 +123,9 @@ export async function saveSite(input: SiteInput): Promise<SiteConfig> {
 }
 
 export async function deleteSite(id: string): Promise<void> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [])
+  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+  )
   await writeJson(
     dataFile('sites.json'),
     stored.filter((s) => s.id !== id)
@@ -114,7 +135,9 @@ export async function deleteSite(id: string): Promise<void> {
 export async function getSiteWithSecret(
   id: string
 ): Promise<{ site: SiteConfig; secret: { password?: string; passphrase?: string } } | null> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [])
+  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+  )
   const site = stored.find((s) => s.id === id)
   if (!site) return null
   return {
@@ -124,12 +147,22 @@ export async function getSiteWithSecret(
 }
 
 export async function getKnownHost(hostPort: string): Promise<KnownHostRecord | undefined> {
-  const all = await readJson<Record<string, KnownHostRecord>>(dataFile('known-hosts.json'), {})
+  const all = await readJson<Record<string, KnownHostRecord>>(
+    dataFile('known-hosts.json'),
+    {},
+    (value): value is Record<string, KnownHostRecord> =>
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+  )
   return all[hostPort]
 }
 
 export async function trustKnownHost(hostPort: string, fingerprint: string): Promise<void> {
-  const all = await readJson<Record<string, KnownHostRecord>>(dataFile('known-hosts.json'), {})
+  const all = await readJson<Record<string, KnownHostRecord>>(
+    dataFile('known-hosts.json'),
+    {},
+    (value): value is Record<string, KnownHostRecord> =>
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+  )
   all[hostPort] = { fingerprint, addedAt: Date.now() }
   await writeJson(dataFile('known-hosts.json'), all)
 }

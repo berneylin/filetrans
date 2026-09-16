@@ -17,6 +17,15 @@ import {
   TransferManager
 } from '../src/main/sftp/transfer'
 
+function fsSyncExists(file: string): boolean {
+  try {
+    statSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
 class FakeWriteStream extends Writable {
   private buffer: Buffer
 
@@ -116,14 +125,35 @@ class FakeSession {
 
   async removeEntries(targets: string[]): Promise<void> {
     for (const target of targets) {
-      this.files.delete(target)
-      this.links.delete(target)
-      this.dirs.delete(target)
+      const prefix = `${target}/`
+      for (const key of [...this.files.keys(), ...this.links.keys(), ...this.dirs]) {
+        if (key === target || key.startsWith(prefix)) {
+          this.files.delete(key)
+          this.links.delete(key)
+          this.dirs.delete(key)
+        }
+      }
     }
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
     this.links.set(linkPath, target)
+  }
+
+  async finalizeTransfer(fromPath: string, toPath: string): Promise<void> {
+    const data = this.files.get(fromPath)
+    if (data !== undefined) {
+      this.files.set(toPath, data)
+      this.files.delete(fromPath)
+      return
+    }
+    const link = this.links.get(fromPath)
+    if (link !== undefined) {
+      this.links.set(toPath, link)
+      this.links.delete(fromPath)
+      return
+    }
+    throw new Error('No such file')
   }
 
   async chmodEntry(target: string, mode: number): Promise<void> {
@@ -173,7 +203,10 @@ class FakeSession {
   }
 }
 
-function makeHarness(conflictResolution: ConflictResolution = 'overwrite') {
+function makeHarness(
+  conflictResolution: ConflictResolution = 'overwrite',
+  onConflict?: (prompt: ConflictPrompt) => void | Promise<void>
+) {
   const fake = new FakeSession()
   const events: TransferGroup[] = []
   let manager: TransferManager
@@ -183,7 +216,11 @@ function makeHarness(conflictResolution: ConflictResolution = 'overwrite') {
         events.push(payload as TransferGroup)
       } else if (channel === IPC.evtConflictPrompt) {
         const prompt = payload as ConflictPrompt
-        setTimeout(() => manager.resolveConflict(prompt.transferId, conflictResolution), 0)
+        setTimeout(() => {
+          void Promise.resolve(onConflict?.(prompt)).then(() =>
+            manager.resolveConflict(prompt.transferId, conflictResolution)
+          )
+        }, 0)
       }
     }
   } as unknown as WebContents
@@ -245,6 +282,7 @@ describe('planParallelSegments', () => {
 describe('传输引擎', () => {
   let tempDir = ''
   const target = '/remote/dest/file.bin'
+  const partTarget = `${target}${'.filetrans-part'}`
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'filetrans-engine-'))
@@ -298,13 +336,15 @@ describe('传输引擎', () => {
     expect(pausedActive.length).toBe(1)
     expect(pausedActive[0].transferred).toBeGreaterThan(0)
     expect(pausedActive[0].speed).toBe(0)
-    const pausedSize = fake.files.get(target)?.length ?? 0
+    const pausedSize = fake.files.get(partTarget)?.length ?? 0
     expect(pausedSize).toBeGreaterThan(0)
     expect(pausedSize).toBeLessThan(data.length)
+    expect(fake.files.has(target)).toBe(false)
 
     manager.resume(id)
     await waitFor(() => latest(events, id)?.status === 'done', 30000)
     expect(fake.files.get(target)?.equals(data)).toBe(true)
+    expect(fake.files.has(partTarget)).toBe(false)
     expect(fake.writeLog.some((entry) => entry.offset > 0)).toBe(true)
     expect(latest(events, id)?.activeFiles).toEqual([])
   }, 30000)
@@ -386,7 +426,9 @@ describe('传输引擎', () => {
     })
     await waitFor(() => latest(events, id)?.status === 'done')
 
-    expect(fake.chmodCalls).toContainEqual({ path: target, mode: 0o640 })
+    expect(fake.chmodCalls).toContainEqual({ path: partTarget, mode: 0o640 })
+    expect(fake.files.has(target)).toBe(true)
+    expect(fake.files.has(partTarget)).toBe(false)
     expect(fake.utimesCalls.length).toBeGreaterThan(0)
     expect(fake.utimesCalls[0].mtime).toBeCloseTo(stamp.getTime() / 1000, 0)
   })
@@ -461,14 +503,14 @@ describe('传输引擎', () => {
 
     await waitFor(() => {
       try {
-        return statSync(local).size > 0
+        return statSync(`${local}.filetrans-part`).size > 0
       } catch {
         return false
       }
     })
     manager.pause(id)
     await waitFor(() => latest(events, id)?.status === 'paused')
-    const pausedSize = statSync(local).size
+    const pausedSize = statSync(`${local}.filetrans-part`).size
     expect(pausedSize).toBeGreaterThan(0)
     expect(pausedSize).toBeLessThan(size)
     const readsBefore = fake.readLog.length
@@ -476,8 +518,142 @@ describe('传输引擎', () => {
     manager.resume(id)
     await waitFor(() => latest(events, id)?.status === 'done', 30000)
     expect((await fs.readFile(local)).equals(data)).toBe(true)
+    expect(fsSyncExists(`${local}.filetrans-part`)).toBe(false)
     const resumedReads = fake.readLog.slice(readsBefore)
     expect(resumedReads.length).toBeGreaterThan(0)
     expect(resumedReads.some((entry) => entry.start > 0)).toBe(true)
   }, 30000)
+
+  it('覆盖已存在目录时先递归删除再写入', async () => {
+    const data = randomBytes(16 * 1024)
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, data)
+
+    const { fake, events, manager } = makeHarness('overwrite')
+    fake.dirs.add(target)
+    fake.files.set(`${target}/old.txt`, Buffer.from('stale'))
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.files.get(target)?.equals(data)).toBe(true)
+    expect(fake.files.has(`${target}/old.txt`)).toBe(false)
+    expect(fake.files.has(partTarget)).toBe(false)
+  })
+
+  it('目标为目录且未选择覆盖时报错', async () => {
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, randomBytes(64))
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.dirs.add(target)
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'error')
+    expect(latest(events, id)?.error).toContain('目标为目录')
+  })
+
+  it('同大小不同内容的旧文件续传校验失败后改为覆盖', async () => {
+    const data = randomBytes(64 * 1024)
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, data)
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(target, randomBytes(data.length))
+    fake.writeLog = []
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.files.get(target)?.equals(data)).toBe(true)
+    expect(fake.files.has(partTarget)).toBe(false)
+  })
+
+  it('源文件修改时间变化时禁用续传改为覆盖', async () => {
+    const data = randomBytes(64 * 1024)
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, data)
+
+    const { fake, events, manager } = makeHarness('resume', async () => {
+      const stats = await fs.stat(source)
+      await fs.utimes(source, stats.atime, new Date(0))
+    })
+    fake.files.set(target, Buffer.from(data.subarray(0, 20000)))
+    fake.writeLog = []
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.files.get(target)?.equals(data)).toBe(true)
+    const written = fake.writeLog.reduce((sum, entry) => sum + entry.length, 0)
+    expect(written).toBe(data.length)
+    expect(fake.files.has(partTarget)).toBe(false)
+  })
+
+  it('残留临时文件会触发冲突且覆盖时被清理', async () => {
+    const data = randomBytes(16 * 1024)
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, data)
+
+    const { fake, events, manager } = makeHarness('overwrite')
+    fake.files.set(partTarget, Buffer.from(data.subarray(0, 4096)))
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.files.get(target)?.equals(data)).toBe(true)
+    expect(fake.files.has(partTarget)).toBe(false)
+  })
+
+  it('列表接口返回包含 sessionId 的传输组', async () => {
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, randomBytes(1024))
+
+    const { fake, events, manager } = makeHarness()
+    fake.files.set(target, Buffer.alloc(0))
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    const groups = manager.list()
+    const found = groups.find((group) => group.id === id)
+    expect(found?.sessionId).toBe('test-session')
+    expect(found?.status).toBe('done')
+  })
 })

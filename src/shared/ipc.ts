@@ -30,6 +30,8 @@ export const IPC = {
   transferPause: 'transfer:pause',
   transferResume: 'transfer:resume',
   transferResolveConflict: 'transfer:resolve-conflict',
+  transferList: 'transfer:list',
+  transferListConflicts: 'transfer:list-conflicts',
 
   syncStart: 'sync:start',
   syncCancel: 'sync:cancel',

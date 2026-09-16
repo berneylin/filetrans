@@ -53,6 +53,7 @@ export default function App() {
     )
     void useFiles.getState().initLocal()
     void useSites.getState().loadSites()
+    void useTransfers.getState().hydrate()
     return () => {
       offHostKey()
       offHostKeyExpired()

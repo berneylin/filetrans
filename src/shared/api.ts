@@ -50,6 +50,8 @@ export interface FileTransApi {
     pause(id: string): Promise<void>
     resume(id: string): Promise<void>
     resolveConflict(id: string, resolution: ConflictResolution): Promise<void>
+    list(): Promise<TransferGroup[]>
+    listConflicts(): Promise<ConflictPrompt[]>
   }
   sync: {
     start(req: SyncStartRequest): Promise<string>

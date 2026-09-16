@@ -253,6 +253,23 @@ export class SftpSession extends EventEmitter {
     await this.call((cb) => this.channel.symlink(targetPath, linkPath, cb))
   }
 
+  async finalizeTransfer(fromPath: string, toPath: string): Promise<void> {
+    try {
+      await this.call((cb) => this.channel.ext_openssh_rename(fromPath, toPath, cb))
+      return
+    } catch {
+      /* 不支持 posix-rename，回退常规 rename */
+    }
+    try {
+      await this.call((cb) => this.channel.rename(fromPath, toPath, cb))
+      return
+    } catch {
+      /* 目标已存在等原因，回退删除后重命名 */
+    }
+    if (await this.lexists(toPath)) await this.removeEntries([toPath])
+    await this.call((cb) => this.channel.rename(fromPath, toPath, cb))
+  }
+
   async exists(target: string): Promise<boolean> {
     try {
       await this.stat(target)
@@ -335,15 +352,19 @@ export class SftpSession extends EventEmitter {
   createReadStream(
     target: string,
     options?: { start?: number; end?: number; highWaterMark?: number }
-  ): NodeJS.ReadableStream & { destroy: () => void } {
-    return this.channel.createReadStream(target, options)
+  ): NodeJS.ReadableStream & { destroy: (err?: Error) => void } {
+    return this.channel.createReadStream(target, options) as NodeJS.ReadableStream & {
+      destroy: (err?: Error) => void
+    }
   }
 
   createWriteStream(
     target: string,
     flags: 'w' | 'a' = 'w'
-  ): NodeJS.WritableStream & { destroy: () => void } {
-    return this.channel.createWriteStream(target, { flags })
+  ): NodeJS.WritableStream & { destroy: (err?: Error) => void } {
+    return this.channel.createWriteStream(target, { flags }) as NodeJS.WritableStream & {
+      destroy: (err?: Error) => void
+    }
   }
 
   async close(): Promise<void> {

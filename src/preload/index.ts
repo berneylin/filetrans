@@ -67,7 +67,9 @@ const api: FileTransApi = {
     pause: (id) => invoke(IPC.transferPause, id),
     resume: (id) => invoke(IPC.transferResume, id),
     resolveConflict: (id, resolution: ConflictResolution) =>
-      invoke(IPC.transferResolveConflict, id, resolution)
+      invoke(IPC.transferResolveConflict, id, resolution),
+    list: () => invoke(IPC.transferList),
+    listConflicts: () => invoke(IPC.transferListConflicts)
   },
 
   sync: {
