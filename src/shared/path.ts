@@ -1,3 +1,9 @@
+export function validateDirectoryPath(input: string): string {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed.includes('\0')) throw new Error('无效的目录路径')
+  return trimmed
+}
+
 export function posixNormalize(input: string): string {
   if (!input) return '.'
   const absolute = input.startsWith('/')

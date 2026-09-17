@@ -25,7 +25,7 @@ export function promptMakeDirectory(side: PaneSide): void {
   const pane = readPane(side)
   useUi.getState().showPrompt({
     title: '新建目录',
-    label: '目录名称',
+    label: '目录路径（支持 a/b/c，自动创建父目录）',
     initial: '新建目录',
     onConfirm: async (name) => {
       if (side === 'local') await window.api.local.mkdir(pane.path, name)

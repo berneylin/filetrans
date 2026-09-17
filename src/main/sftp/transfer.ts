@@ -19,6 +19,7 @@ import type {
 } from '@shared/types'
 import type { SessionManager } from './manager'
 import type { SftpSession } from './session'
+import { replaceWithRollback } from '../replace'
 
 const MAX_CONCURRENT_FILES = 3
 const FLUSH_INTERVAL_MS = 300
@@ -199,24 +200,6 @@ async function localSize(target: string): Promise<number | null> {
   }
 }
 
-async function removeLocalSymlink(target: string): Promise<void> {
-  try {
-    const stats = await fs.lstat(target)
-    if (stats.isSymbolicLink()) await fs.unlink(target)
-  } catch {
-    /* 目标不存在 */
-  }
-}
-
-async function removeRemoteSymlink(session: SftpSession, target: string): Promise<void> {
-  try {
-    const stats = await session.lstat(target)
-    if (typeFromMode(stats.mode) === 'symlink') await session.removeEntries([target])
-  } catch {
-    /* 目标不存在 */
-  }
-}
-
 function findScope(roots: ScopeRoot[], resolved: string): ScopeRoot | undefined {
   let best: ScopeRoot | undefined
   for (const root of roots) {
@@ -379,7 +362,7 @@ export class TransferManager {
       }
       resumeConflicts = resolution === 'resume'
       if (resolution === 'overwrite') {
-        await this.discardConflicts(session, req.direction, jobs, links)
+        await this.cleanupParts(session, req.direction, targets)
       }
     }
 
@@ -544,29 +527,6 @@ export class TransferManager {
         }
       } catch {
         /* 清理残留临时文件失败不阻断 */
-      }
-    }
-  }
-
-  private async discardConflicts(
-    session: SftpSession,
-    direction: TransferDirection,
-    jobs: Job[],
-    links: LinkJob[]
-  ): Promise<void> {
-    const upload = direction === 'upload'
-    for (const target of [...jobs.map((job) => job.target), ...links.map((link) => link.linkPath)]) {
-      const part = partOf(target)
-      try {
-        if (upload) {
-          if (await session.lexists(target)) await session.removeEntries([target])
-          if (await session.lexists(part)) await session.removeEntries([part])
-        } else {
-          await fs.rm(target, { recursive: true, force: true })
-          await fs.rm(part, { force: true })
-        }
-      } catch {
-        /* 预清理失败留给 runJob 报错 */
       }
     }
   }
@@ -867,13 +827,17 @@ export class TransferManager {
     state: GroupState,
     link: LinkJob
   ): Promise<void> {
-    if (state.group.direction === 'upload') {
-      if (await session.lexists(link.linkPath)) await session.removeEntries([link.linkPath])
-      await session.symlink(link.target, link.linkPath)
+    const upload = state.group.direction === 'upload'
+    const partTarget = partOf(link.linkPath)
+    if (upload) {
+      if (await session.lexists(partTarget)) await session.removeEntries([partTarget])
+      await session.symlink(link.target, partTarget)
     } else {
-      await fs.rm(link.linkPath, { recursive: true, force: true })
-      await fs.symlink(link.target, link.linkPath)
+      await fs.rm(partTarget, { force: true })
+      await fs.symlink(link.target, partTarget)
     }
+    if (state.cancelled) return
+    await this.finalizeTarget(session, upload, partTarget, link.linkPath)
   }
 
   private async worker(state: GroupState, session: SftpSession): Promise<void> {
@@ -948,6 +912,7 @@ export class TransferManager {
       throw new Error(`无法访问源文件: ${job.source}`)
     }
     if (size !== job.size) {
+      job.sourceChanged = true
       state.group.totalBytes = Math.max(0, state.group.totalBytes + (size - job.size))
       job.size = size
     }
@@ -957,7 +922,7 @@ export class TransferManager {
     job.mtime = mtime
   }
 
-  private async verifyResumeWindow(
+  private async verifyResumePrefix(
     state: GroupState,
     session: SftpSession,
     job: Job,
@@ -965,24 +930,25 @@ export class TransferManager {
     destPath: string,
     offset: number
   ): Promise<boolean> {
-    if (offset <= 0) return true
-    const length = Math.min(RESUME_VERIFY_BYTES, offset)
-    const start = offset - length
-    let source: Buffer | null
-    let dest: Buffer | null
-    try {
-      source = upload
-        ? await readLocalRange(job.source, start, offset - 1)
-        : await readRemoteRange(state, session, job.source, start, offset - 1)
-      dest = upload
-        ? await readRemoteRange(state, session, destPath, start, offset - 1)
-        : await readLocalRange(destPath, start, offset - 1)
-    } catch (err) {
-      if (isAbortedError(err)) throw err
-      return false
+    for (let start = 0; start < offset; start += RESUME_VERIFY_BYTES) {
+      if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
+      const end = Math.min(offset, start + RESUME_VERIFY_BYTES) - 1
+      try {
+        const source = upload
+          ? await readLocalRange(job.source, start, end)
+          : await readRemoteRange(state, session, job.source, start, end)
+        const dest = upload
+          ? await readRemoteRange(state, session, destPath, start, end)
+          : await readLocalRange(destPath, start, end)
+        if (!source || !dest || source.length !== end - start + 1 || !source.equals(dest)) {
+          return false
+        }
+      } catch (err) {
+        if (isAbortedError(err)) throw err
+        return false
+      }
     }
-    if (!source || !dest || source.length !== dest.length) return false
-    return source.equals(dest)
+    return true
   }
 
   private async moveToPart(
@@ -996,8 +962,6 @@ export class TransferManager {
         ? typeFromMode(stats.mode) === 'symlink'
         : stats.isSymbolicLink()
       if (isSymlink) {
-        if (upload) await session.removeEntries([target])
-        else await fs.unlink(target)
         return false
       }
       if (upload) await session.finalizeTransfer(target, partOf(target))
@@ -1031,13 +995,30 @@ export class TransferManager {
     job: Job,
     partTarget: string
   ): Promise<void> {
+    if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
     const upload = state.group.direction === 'upload'
     const delta = job.size - job.transferred
     if (delta > 0) state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
     job.transferred = job.size
     await this.applyFileAttributes(state, session, job, upload, partTarget)
-    if (upload) await session.finalizeTransfer(partTarget, job.target)
-    else await fs.rename(partTarget, job.target)
+    if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
+    await this.finalizeTarget(session, upload, partTarget, job.target)
+  }
+
+  private async finalizeTarget(
+    session: SftpSession,
+    upload: boolean,
+    source: string,
+    target: string
+  ): Promise<void> {
+    if (upload) await session.finalizeTransfer(source, target)
+    else {
+      await replaceWithRollback(source, target, {
+        rename: (from, to) => fs.rename(from, to),
+        exists: localLexists,
+        remove: (file) => fs.rm(file, { recursive: true, force: true })
+      })
+    }
   }
 
   private async runJob(state: GroupState, session: SftpSession, job: Job): Promise<void> {
@@ -1046,109 +1027,76 @@ export class TransferManager {
 
     await this.syncSourceStats(state, session, job)
 
+    const targetStats = upload
+      ? await session.lstat(job.target).catch(() => undefined)
+      : await fs.lstat(job.target).catch(() => undefined)
+    if (targetStats && typeFromMode(targetStats.mode) === 'directory' && state.resolution !== 'overwrite') {
+      throw new Error(`目标为目录，无法写入: ${job.target}（请选择覆盖后重试）`)
+    }
+
     let useResume = state.options.resume && (state.resumeConflicts || job.attempted === true)
-    if (useResume && job.sourceChanged) useResume = false
+    if (job.sourceChanged) useResume = false
 
     let offset = 0
     if (useResume) {
-      let resumeOffset: number | null = null
-
-      if (!upload && job.parallel && isParallelComplete(job.parallel, job.size)) {
-        await this.completeJob(state, session, job, partTarget)
-        return
-      }
-
       const partSize = upload ? await this.remoteSize(session, partTarget) : await localSize(partTarget)
-      if (partSize !== null) {
-        const plan = resolveResumeOffset(job.size, partSize)
-        if (plan.complete) {
-          await this.completeJob(state, session, job, partTarget)
-          return
-        }
-        resumeOffset = plan.offset
-      } else {
-        const legacySize = upload
-          ? await this.remoteSize(session, job.target)
-          : await localSize(job.target)
-        if (legacySize === null) {
-          useResume = false
+      if (!upload && job.parallel && partSize !== null) {
+        const requiredSize = Math.max(
+          job.parallel.base,
+          ...job.parallel.segments.map((segment) => segment.written > 0 ? segment.start + segment.written : 0)
+        )
+        if (partSize >= requiredSize && partSize <= job.size) {
+          offset = job.parallel.base
         } else {
-          const plan = resolveResumeOffset(job.size, legacySize)
+          useResume = false
+        }
+      } else if (partSize !== null) {
+        job.parallel = undefined
+        const plan = resolveResumeOffset(job.size, partSize)
+        const match = partSize <= job.size && await this.verifyResumePrefix(
+          state, session, job, upload, partTarget, plan.offset
+        )
+        if (match) {
+          offset = plan.offset
           if (plan.complete) {
-            const match = await this.verifyResumeWindow(
-              state,
-              session,
-              job,
-              upload,
-              job.target,
-              plan.offset
-            )
-            if (match) {
-              const delta = job.size - job.transferred
-              if (delta > 0) {
-                state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
-              }
-              job.transferred = job.size
-              await this.applyFileAttributes(state, session, job, upload, job.target)
-              return
-            }
-            useResume = false
-        } else if (await this.moveToPart(session, upload, job.target)) {
-          const match = await this.verifyResumeWindow(
-            state,
-            session,
-            job,
-            upload,
-            partTarget,
-            plan.offset
-          )
-          if (match) {
-            resumeOffset = plan.offset
-          } else {
-            await this.discardPartial(session, upload, job.target)
-            useResume = false
+            await this.completeJob(state, session, job, partTarget)
+            return
           }
         } else {
           useResume = false
         }
-        }
-      }
-
-      if (useResume) {
-        offset = resumeOffset ?? 0
-        if (!upload && job.parallel && (await localSize(partTarget)) === null) {
-          job.parallel = undefined
-        }
       } else {
         job.parallel = undefined
-        offset = 0
+        const legacySize = upload
+          ? await this.remoteSize(session, job.target)
+          : await localSize(job.target)
+        if (legacySize === null || legacySize > job.size) {
+          useResume = false
+        } else {
+          const plan = resolveResumeOffset(job.size, legacySize)
+          const match = await this.verifyResumePrefix(
+            state, session, job, upload, job.target, plan.offset
+          )
+          if (match && plan.complete) {
+            const delta = job.size - job.transferred
+            if (delta > 0) state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
+            job.transferred = job.size
+            await this.applyFileAttributes(state, session, job, upload, job.target)
+            return
+          }
+          if (match && await this.moveToPart(session, upload, job.target)) {
+            offset = plan.offset
+          } else {
+            useResume = false
+          }
+        }
       }
-    } else {
+    }
+
+    if (!useResume) {
       job.parallel = undefined
       offset = 0
       await this.discardPartial(session, upload, job.target)
-    }
-
-    if (upload) {
-      const stats = await session.lstat(job.target).catch(() => undefined)
-      if (stats && typeFromMode(stats.mode) === 'directory') {
-        if (state.resolution === 'overwrite') {
-          await session.removeEntries([job.target]).catch(() => undefined)
-        } else {
-          throw new Error(`目标为目录，无法写入: ${job.target}（请选择覆盖后重试）`)
-        }
-      }
-      await removeRemoteSymlink(session, job.target)
-    } else {
-      const stats = await fs.lstat(job.target).catch(() => undefined)
-      if (stats?.isDirectory()) {
-        if (state.resolution === 'overwrite') {
-          await fs.rm(job.target, { recursive: true, force: true }).catch(() => undefined)
-        } else {
-          throw new Error(`目标为目录，无法写入: ${job.target}（请选择覆盖后重试）`)
-        }
-      }
-      await removeLocalSymlink(job.target)
     }
 
     const remaining = job.size - offset
@@ -1276,6 +1224,9 @@ export class TransferManager {
         streams.add(pair)
         try {
           await pipeline(reader as never, this.progress(state, job), writer as never)
+          if (writer.bytesWritten !== length - segment.written) {
+            throw new Error('分段大小校验失败')
+          }
           segment.written = length
         } catch (err) {
           const persisted = Math.max(0, Math.min(length - segment.written, writer.bytesWritten))

@@ -87,6 +87,8 @@ class FakeSession {
   failNextWriteAfter: number | null = null
   writeDelayMs = 0
   readDelayMs = 0
+  readDelays = new Map<number, number>()
+  failNextReadAfter: number | null = null
   activeReads = 0
   maxActiveReads = 0
 
@@ -143,6 +145,7 @@ class FakeSession {
   async finalizeTransfer(fromPath: string, toPath: string): Promise<void> {
     const data = this.files.get(fromPath)
     if (data !== undefined) {
+      await this.removeEntries([toPath])
       this.files.set(toPath, data)
       this.files.delete(fromPath)
       return
@@ -186,6 +189,11 @@ class FakeSession {
       read: () => {
         setTimeout(() => {
           if (stream.destroyed) return
+          if (this.failNextReadAfter !== null && pos - start >= this.failNextReadAfter) {
+            this.failNextReadAfter = null
+            stream.destroy(new Error('模拟网络中断'))
+            return
+          }
           if (pos > end) {
             stream.push(null)
             return
@@ -193,7 +201,7 @@ class FakeSession {
           const stop = Math.min(end + 1, pos + highWaterMark)
           stream.push(Buffer.from(file.subarray(pos, stop)))
           pos = stop
-        }, this.readDelayMs)
+        }, this.readDelays.get(start) ?? this.readDelayMs)
       }
     })
     stream.on('close', () => {
@@ -524,7 +532,173 @@ describe('传输引擎', () => {
     expect(resumedReads.some((entry) => entry.start > 0)).toBe(true)
   }, 30000)
 
-  it('覆盖已存在目录时先递归删除再写入', async () => {
+  it.each([
+    ['upload', 1024 * 1024], ['download', 1024 * 1024],
+    ['upload', 512 * 1024], ['download', 512 * 1024]
+  ] as const)('%s 续传校验完整前缀，拒绝损坏的 %i 字节临时文件', async (direction, size) => {
+    const data = Buffer.alloc(1024 * 1024, 7)
+    const corrupted = Buffer.from(data.subarray(0, size))
+    corrupted[0] = 0
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness('resume')
+    if (direction === 'upload') {
+      await fs.writeFile(local, data)
+      fake.files.set(partTarget, corrupted)
+    } else {
+      fake.files.set(target, data)
+      await fs.writeFile(`${local}.filetrans-part`, corrupted)
+    }
+    const id = await manager.start({
+      sessionId: 'test-session', direction,
+      sources: [direction === 'upload' ? local : target],
+      targetDir: direction === 'upload' ? '/remote/dest' : tempDir,
+      recursive: true, options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    const result = direction === 'upload' ? fake.files.get(target) : await fs.readFile(local)
+    expect(result?.equals(data)).toBe(true)
+  })
+
+  it('重启后续传同大小稀疏临时文件会重新下载完整内容', async () => {
+    const data = Buffer.alloc(PARALLEL_MIN_BYTES, 7)
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(target, data)
+    const handle = await fs.open(`${local}.filetrans-part`, 'w')
+    await handle.write(data.subarray(-1), 0, 1, data.length - 1)
+    await handle.close()
+    const id = await manager.start({
+      sessionId: 'test-session', direction: 'download', sources: [target],
+      targetDir: tempDir, recursive: true,
+      options: { resume: true, retries: 0, concurrency: 2, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect((await fs.readFile(local)).equals(data)).toBe(true)
+  })
+
+  it.each(['upload', 'download'] as const)('%s 已有临时内容校验通过后只补传剩余部分', async (direction) => {
+    const data = Buffer.alloc(1024 * 1024, 7)
+    const prefixSize = 512 * 1024
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness('resume')
+    if (direction === 'upload') {
+      await fs.writeFile(local, data)
+      fake.files.set(partTarget, data.subarray(0, prefixSize))
+    } else {
+      fake.files.set(target, data)
+      await fs.writeFile(`${local}.filetrans-part`, data.subarray(0, prefixSize))
+    }
+    const id = await manager.start({
+      sessionId: 'test-session', direction,
+      sources: [direction === 'upload' ? local : target],
+      targetDir: direction === 'upload' ? '/remote/dest' : tempDir,
+      recursive: true, options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    const result = direction === 'upload' ? fake.files.get(target) : await fs.readFile(local)
+    expect(result?.equals(data)).toBe(true)
+    if (direction === 'upload') expect(fake.writeLog[0].offset).toBe(prefixSize)
+    else expect(fake.readLog.at(-1)?.start).toBe(prefixSize)
+  })
+
+  it.each(['upload', 'download'] as const)('%s 取消覆盖时保留旧文件', async (direction) => {
+    const data = Buffer.alloc(1024 * 1024, 7)
+    const old = Buffer.from('旧内容')
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness('overwrite')
+    fake.writeDelayMs = 20
+    fake.readDelayMs = 20
+    if (direction === 'upload') {
+      await fs.writeFile(local, data)
+      fake.files.set(target, old)
+    } else {
+      fake.files.set(target, data)
+      await fs.writeFile(local, old)
+    }
+    const id = await manager.start({
+      sessionId: 'test-session', direction,
+      sources: [direction === 'upload' ? local : target],
+      targetDir: direction === 'upload' ? '/remote/dest' : tempDir,
+      recursive: true, options: { retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => direction === 'upload'
+      ? (fake.files.get(partTarget)?.length ?? 0) > 0
+      : fsSyncExists(`${local}.filetrans-part`) && statSync(`${local}.filetrans-part`).size > 0)
+    manager.cancel(id)
+    await waitFor(() => latest(events, id)?.status === 'cancelled')
+    const result = direction === 'upload' ? fake.files.get(target) : await fs.readFile(local)
+    expect(result?.equals(old)).toBe(true)
+  })
+
+  it('并行尾段先完成时暂停恢复仍补齐前面未完成的分段', async () => {
+    const data = Buffer.alloc(PARALLEL_MIN_BYTES, 7)
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness()
+    fake.files.set(target, data)
+    fake.readDelays.set(0, 20)
+    const id = await manager.start({
+      sessionId: 'test-session', direction: 'download', sources: [target],
+      targetDir: tempDir, recursive: true,
+      options: { resume: true, retries: 0, concurrency: 2, ...OFF_ATTRS }
+    })
+    await waitFor(() => fsSyncExists(`${local}.filetrans-part`) && statSync(`${local}.filetrans-part`).size === data.length)
+    manager.pause(id)
+    await waitFor(() => fake.activeReads === 0)
+    const readsBefore = fake.readLog.length
+    manager.resume(id)
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect((await fs.readFile(local)).equals(data)).toBe(true)
+    expect(fake.readLog.length).toBeGreaterThan(readsBefore)
+    expect(fake.readLog.slice(readsBefore).every((read) => read.end < PARALLEL_MIN_SEGMENT)).toBe(true)
+  })
+
+  it.each([
+    ['upload', 'file'], ['upload', 'directory'], ['upload', 'symlink'],
+    ['download', 'file'], ['download', 'directory'], ['download', 'symlink']
+  ] as const)('%s 覆盖 %s 失败时保留旧目标', async (direction, type) => {
+    const data = Buffer.alloc(1024 * 1024, 7)
+    const old = Buffer.from('旧内容')
+    const local = path.join(tempDir, 'file.bin')
+    const { fake, events, manager } = makeHarness('overwrite')
+    if (direction === 'upload') {
+      await fs.writeFile(local, data)
+      if (type === 'directory') {
+        fake.dirs.add(target)
+        fake.files.set(`${target}/old.txt`, old)
+      } else if (type === 'symlink') {
+        fake.links.set(target, '/remote/old.txt')
+        fake.files.set('/remote/old.txt', old)
+      } else fake.files.set(target, old)
+      fake.failNextWriteAfter = 65536
+    } else {
+      fake.files.set(target, data)
+      if (type === 'directory') {
+        await fs.mkdir(local)
+        await fs.writeFile(path.join(local, 'old.txt'), old)
+      } else if (type === 'symlink') {
+        await fs.writeFile(path.join(tempDir, 'old.txt'), old)
+        await fs.symlink('old.txt', local)
+      } else await fs.writeFile(local, old)
+      fake.failNextReadAfter = 65536
+    }
+    const id = await manager.start({
+      sessionId: 'test-session', direction,
+      sources: [direction === 'upload' ? local : target],
+      targetDir: direction === 'upload' ? '/remote/dest' : tempDir,
+      recursive: true, options: { retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'error')
+    if (direction === 'upload') {
+      if (type === 'symlink') expect(fake.links.get(target)).toBe('/remote/old.txt')
+      const result = fake.files.get(type === 'directory' ? `${target}/old.txt` : type === 'symlink' ? '/remote/old.txt' : target)
+      expect(result?.equals(old)).toBe(true)
+    } else {
+      if (type === 'symlink') expect(await fs.readlink(local)).toBe('old.txt')
+      expect((await fs.readFile(type === 'directory' ? path.join(local, 'old.txt') : local)).equals(old)).toBe(true)
+    }
+  })
+
+  it('覆盖已存在目录时完成后替换目录', async () => {
     const data = randomBytes(16 * 1024)
     const source = path.join(tempDir, 'file.bin')
     await fs.writeFile(source, data)

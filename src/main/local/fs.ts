@@ -2,6 +2,7 @@ import { promises as fs, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { DirListing, EntryType, FileEntry } from '@shared/types'
+import { validateDirectoryPath } from '@shared/path'
 
 function friendlyError(err: unknown, target: string): Error {
   const code = (err as NodeJS.ErrnoException)?.code
@@ -94,9 +95,9 @@ export async function listLocal(dirPath: string): Promise<DirListing> {
 }
 
 export async function makeDir(parent: string, name: string): Promise<string> {
-  const target = path.join(parent, validateName(name))
+  const target = path.resolve(parent, validateDirectoryPath(name))
   try {
-    await fs.mkdir(target)
+    await fs.mkdir(target, { recursive: true })
   } catch (err) {
     throw friendlyError(err, target)
   }

@@ -219,6 +219,15 @@ export function FileTable({ side }: { side: PaneSide }) {
   }
 
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget) return
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      event.stopPropagation()
+      paneSetSelected(side, entries.map((entry) => entry.name))
+      anchorRef.current = entries.length > 0 ? rows.length - entries.length : null
+      typeAheadRef.current = { buffer: '', at: 0 }
+      return
+    }
     if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return
     const key = event.key.toLowerCase()
     const now = Date.now()

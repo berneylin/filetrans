@@ -5,8 +5,9 @@ import { homedir } from 'node:os'
 import { Client, utils, type SFTPWrapper, type Stats } from 'ssh2'
 import type { ConnectParams, DirListing, EntryType, FileEntry, HostKeyInfo, KeyCheckResult } from '@shared/types'
 import { typeFromMode } from '@shared/format'
-import { posixDirname, posixJoin, posixNormalize, posixParent } from '@shared/path'
+import { posixDirname, posixJoin, posixNormalize, posixParent, validateDirectoryPath } from '@shared/path'
 import { validateName } from '../local/fs'
+import { replaceWithRollback } from '../replace'
 
 export type HostKeyResolver = (
   info: HostKeyInfo
@@ -254,20 +255,20 @@ export class SftpSession extends EventEmitter {
   }
 
   async finalizeTransfer(fromPath: string, toPath: string): Promise<void> {
-    try {
-      await this.call((cb) => this.channel.ext_openssh_rename(fromPath, toPath, cb))
-      return
-    } catch {
-      /* 不支持 posix-rename，回退常规 rename */
-    }
-    try {
-      await this.call((cb) => this.channel.rename(fromPath, toPath, cb))
-      return
-    } catch {
-      /* 目标已存在等原因，回退删除后重命名 */
-    }
-    if (await this.lexists(toPath)) await this.removeEntries([toPath])
-    await this.call((cb) => this.channel.rename(fromPath, toPath, cb))
+    const rename = (source: string, target: string): Promise<void> =>
+      this.call((cb) => this.channel.rename(source, target, cb))
+    await replaceWithRollback(fromPath, toPath, {
+      rename,
+      replace: async (source, target) => {
+        try {
+          await this.call((cb) => this.channel.ext_openssh_rename(source, target, cb))
+        } catch {
+          await rename(source, target)
+        }
+      },
+      exists: (target) => this.lexists(target),
+      remove: (target) => this.removeEntries([target])
+    })
   }
 
   async exists(target: string): Promise<boolean> {
@@ -289,8 +290,9 @@ export class SftpSession extends EventEmitter {
   }
 
   async makeDir(parent: string, name: string): Promise<string> {
-    const target = posixJoin(parent, validateName(name))
-    await this.call((cb) => this.channel.mkdir(target, cb))
+    const directory = validateDirectoryPath(name)
+    const target = directory.startsWith('/') ? posixNormalize(directory) : posixJoin(parent, directory)
+    await this.mkdirp(target)
     return target
   }
 

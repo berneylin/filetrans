@@ -253,13 +253,14 @@ describeMaybe('SFTP 集成: 跟随并重映射 symlink', () => {
 })
 
 describeMaybe('SFTP 集成: 临时文件与原子落盘', () => {
+  let partConflictChoice: ConflictResolution = 'overwrite'
   const send = (channel: string, payload: unknown): void => {
     if (channel === IPC.evtHostKeyPrompt) {
       const prompt = payload as HostKeyPrompt
       setTimeout(() => sessions.respondHostKey(prompt.promptId, true, false), 0)
     } else if (channel === IPC.evtConflictPrompt) {
       const prompt = payload as ConflictPrompt
-      setTimeout(() => transfers.resolveConflict(prompt.transferId, 'overwrite'), 0)
+      setTimeout(() => transfers.resolveConflict(prompt.transferId, partConflictChoice), 0)
     }
   }
   const fakeWebContents = { send } as unknown as WebContents
@@ -323,7 +324,17 @@ describeMaybe('SFTP 集成: 临时文件与原子落盘', () => {
     expect(stats.size).toBe(content.length)
   })
 
-  it('覆盖目录目标时递归删除后写入', async () => {
+  it('新建目录递归创建父目录，重复创建成功，文件冲突报错', async () => {
+    const target = `${remoteCase}/nested/中文目录/child`
+    expect(await session.makeDir(remoteCase, 'nested/中文目录/child')).toBe(target)
+    expect((await session.stat(target)).isDirectory()).toBe(true)
+    expect(await session.makeDir(remoteCase, 'nested/中文目录/child')).toBe(target)
+    await expect(session.makeDir(remoteCase, 'data.bin/child')).rejects.toThrow('无法创建目录')
+    expect((await session.stat(remoteFile)).isFile()).toBe(true)
+  })
+
+  it('覆盖目录目标时完成后替换旧目录', async () => {
+    await session.removeEntries([remoteFile])
     await session.mkdirp(remoteFile)
     const source = path.join(tempLocal, 'data.bin')
     const id = await transfers.start({
@@ -342,7 +353,7 @@ describeMaybe('SFTP 集成: 临时文件与原子落盘', () => {
   })
 
   it('下载写入临时文件并在完成后重命名', async () => {
-    const local = path.join(tempLocal, 'download.bin')
+    const local = path.join(tempLocal, 'data.bin')
     const id = await transfers.start({
       sessionId,
       direction: 'download',
@@ -356,6 +367,50 @@ describeMaybe('SFTP 集成: 临时文件与原子落盘', () => {
     expect((await fs.readFile(local)).length).toBe(8 * 1024 * 1024)
     expect(fsSyncExists(`${local}.filetrans-part`)).toBe(false)
   })
+
+  it('残留稀疏文件大小相同也必须校验并补齐内容', async () => {
+    const destDir = path.join(tempLocal, 'sparse')
+    await fs.mkdir(destDir)
+    const local = path.join(destDir, 'data.bin')
+    const data = Buffer.alloc(8 * 1024 * 1024, 7)
+    const handle = await fs.open(`${local}.filetrans-part`, 'w')
+    await handle.write(data.subarray(-256 * 1024), 0, 256 * 1024, data.length - 256 * 1024)
+    await handle.close()
+    partConflictChoice = 'resume'
+    try {
+      const id = await transfers.start({
+        sessionId, direction: 'download', sources: [remoteFile], targetDir: destDir,
+        recursive: true, options: { resume: true, retries: 0, concurrency: 2 }
+      })
+      const group = await waitForStatus(id, 60000)
+      expect(group.status).toBe('done')
+      expect((await fs.readFile(local)).equals(data)).toBe(true)
+    } finally {
+      partConflictChoice = 'overwrite'
+    }
+  }, 60000)
+
+  it('覆盖上传写入失败时远端旧文件仍完整保留', async () => {
+    const old = Buffer.alloc(8 * 1024 * 1024, 7)
+    const source = path.join(tempLocal, 'data.bin')
+    await fs.writeFile(source, Buffer.alloc(old.length, 9))
+    const write = vi.spyOn(session, 'createWriteStream').mockImplementationOnce(() => {
+      throw new Error('模拟写入失败')
+    })
+    try {
+      const id = await transfers.start({
+        sessionId, direction: 'upload', sources: [source], targetDir: remoteCase,
+        recursive: true, options: { retries: 0 }
+      })
+      const group = await waitForStatus(id, 60000)
+      expect(group.status).toBe('error')
+      const chunks: Buffer[] = []
+      for await (const chunk of session.createReadStream(remoteFile)) chunks.push(chunk as Buffer)
+      expect(Buffer.concat(chunks).equals(old)).toBe(true)
+    } finally {
+      write.mockRestore()
+    }
+  }, 60000)
 })
 
 function fsSyncExists(file: string): boolean {
