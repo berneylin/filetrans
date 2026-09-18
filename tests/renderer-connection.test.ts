@@ -34,6 +34,19 @@ function makeApi(site: SiteConfig = makeSite()) {
   }
 }
 
+function makeStorage(): {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+  removeItem: (key: string) => void
+} {
+  const map = new Map<string, string>()
+  return {
+    getItem: (key) => map.get(key) ?? null,
+    setItem: (key, value) => void map.set(key, value),
+    removeItem: (key) => void map.delete(key)
+  }
+}
+
 function installWindow(api: ReturnType<typeof makeApi>): void {
   ;(globalThis as unknown as Record<string, unknown>).window = { api }
 }
@@ -41,6 +54,7 @@ function installWindow(api: ReturnType<typeof makeApi>): void {
 describe('标签页打开站点时使用默认路径', () => {
   beforeEach(() => {
     vi.resetModules()
+    vi.stubGlobal('localStorage', makeStorage())
   })
 
   it('跳转到默认远程路径', async () => {
