@@ -50,20 +50,25 @@ interface FilesStore {
 }
 
 export const useFiles = create<FilesStore>((set, get) => {
+  let loadSeq = 0
+
   const patchPane = (patch: Partial<PaneState>): void => {
     set((state) => ({ local: { ...state.local, ...patch } }))
   }
 
   const load = async (target?: string): Promise<boolean> => {
     const pane = get().local
+    const seq = ++loadSeq
     patchPane({ loading: true, error: null })
     try {
       const path = target || pane.path || (await window.api.local.home())
       const listing = await window.api.local.list(path)
+      if (seq !== loadSeq) return false
       patchPane({ path: listing.path, listing, loading: false, selected: [] })
       useVisits.getState().recordLocal(listing.path)
       return true
     } catch (err) {
+      if (seq !== loadSeq) return false
       patchPane({ loading: false, error: errorMessage(err) })
       return false
     }

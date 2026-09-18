@@ -55,6 +55,9 @@ function statusText(group: TransferGroup): string {
   if (group.status === 'active' && group.retryCount) {
     return `重试 ${group.retryCount}`
   }
+  if (group.status === 'error' && group.failedCount) {
+    return `失败 ${group.failedCount}`
+  }
   return STATUS_TEXT[group.status]
 }
 
@@ -394,6 +397,24 @@ export function TransferPanel() {
                     <div className="pb-1">
                       {group.activeFiles.map((file) => (
                         <FileRow key={file.id} file={file} />
+                      ))}
+                    </div>
+                  )}
+                  {group.failedFiles && group.failedFiles.length > 0 && (
+                    <div className="pb-1">
+                      {group.failedFiles.map((file) => (
+                        <div
+                          key={file.id}
+                          className="flex items-center gap-2 px-2 py-0.5 pl-7 text-[11px] text-red-600"
+                        >
+                          <X size={12} className="shrink-0" />
+                          <span className="min-w-24 flex-1 truncate" title={file.path}>
+                            {file.name}
+                          </span>
+                          <span className="min-w-24 max-w-1/2 truncate" title={file.error}>
+                            {file.error}
+                          </span>
+                        </div>
                       ))}
                     </div>
                   )}

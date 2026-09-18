@@ -13,6 +13,7 @@ import {
   PARALLEL_MIN_BYTES,
   PARALLEL_MIN_SEGMENT,
   planParallelSegments,
+  planResumeVerify,
   resolveResumeOffset,
   TransferManager
 } from '../src/main/sftp/transfer'
@@ -284,6 +285,47 @@ describe('planParallelSegments', () => {
   it('剩余不足最小分段时只切一段', () => {
     expect(planParallelSegments(1024 * 1024, 0, 8).length).toBe(1)
     expect(planParallelSegments(1024, 1024, 8)).toEqual([])
+  })
+})
+
+describe('planResumeVerify', () => {
+  const chunk = 256 * 1024
+
+  it('没有已传内容时无需校验', () => {
+    expect(planResumeVerify(0)).toEqual([])
+  })
+
+  it('小前缀逐块完整校验', () => {
+    expect(planResumeVerify(3 * chunk)).toEqual([
+      { start: 0, end: chunk - 1 },
+      { start: chunk, end: 2 * chunk - 1 },
+      { start: 2 * chunk, end: 3 * chunk - 1 }
+    ])
+  })
+
+  it('非整块前缀的最后一块按实际长度截断', () => {
+    const offset = chunk + 100
+    expect(planResumeVerify(offset)).toEqual([
+      { start: 0, end: chunk - 1 },
+      { start: chunk, end: offset - 1 }
+    ])
+  })
+
+  it('大前缀采样校验且覆盖首尾、范围有界', () => {
+    const offset = 100 * chunk
+    const ranges = planResumeVerify(offset)
+    expect(ranges.length).toBeGreaterThan(1)
+    expect(ranges.length).toBeLessThan(100)
+    expect(ranges[0].start).toBe(0)
+    expect(ranges[ranges.length - 1].end).toBe(offset - 1)
+    for (let index = 1; index < ranges.length; index++) {
+      expect(ranges[index].start).toBeGreaterThan(ranges[index - 1].end)
+    }
+    for (const range of ranges) {
+      expect(range.start % chunk).toBe(0)
+      expect(range.end).toBeGreaterThanOrEqual(range.start)
+      expect(range.end).toBeLessThan(offset)
+    }
   })
 })
 
@@ -829,5 +871,101 @@ describe('传输引擎', () => {
     const found = groups.find((group) => group.id === id)
     expect(found?.sessionId).toBe('test-session')
     expect(found?.status).toBe('done')
+  })
+
+  it('单个文件失败不中断同批其他文件', async () => {
+    const dataA = randomBytes(64 * 1024)
+    const dataB = randomBytes(64 * 1024)
+    const dataC = randomBytes(64 * 1024)
+    const sourceA = path.join(tempDir, 'a.bin')
+    const sourceB = path.join(tempDir, 'b.bin')
+    const sourceC = path.join(tempDir, 'c.bin')
+    await fs.writeFile(sourceA, dataA)
+    await fs.writeFile(sourceB, dataB)
+    await fs.writeFile(sourceC, dataC)
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.dirs.add('/remote/dest/b.bin')
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [sourceA, sourceB, sourceC],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'error')
+
+    const group = latest(events, id)
+    expect(group?.failedCount).toBe(1)
+    expect(group?.failedFiles?.map((file) => file.name)).toEqual(['b.bin'])
+    expect(group?.failedFiles?.[0].error).toContain('目标为目录')
+    expect(group?.doneFiles).toBe(2)
+    expect(group?.totalFiles).toBe(3)
+    expect(fake.files.get('/remote/dest/a.bin')?.equals(dataA)).toBe(true)
+    expect(fake.files.get('/remote/dest/c.bin')?.equals(dataC)).toBe(true)
+    expect(fake.files.has('/remote/dest/b.bin')).toBe(false)
+  })
+
+  it('大文件续传校验通过时只补传剩余部分且读取次数有界', async () => {
+    const chunk = 256 * 1024
+    const size = 12 * 1024 * 1024
+    const prefixSize = 10 * 1024 * 1024
+    const data = Buffer.alloc(size, 7)
+    const source = path.join(tempDir, 'big.bin')
+    await fs.writeFile(source, data)
+    const remoteTarget = '/remote/dest/big.bin'
+    const remotePart = `${remoteTarget}.filetrans-part`
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(remotePart, Buffer.from(data.subarray(0, prefixSize)))
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+
+    expect(fake.files.get(remoteTarget)?.equals(data)).toBe(true)
+    expect(fake.files.has(remotePart)).toBe(false)
+    const written = fake.writeLog.reduce((sum, entry) => sum + entry.length, 0)
+    expect(written).toBe(size - prefixSize)
+    expect(fake.readLog.length).toBeGreaterThan(0)
+    expect(fake.readLog.length).toBeLessThan(Math.ceil(prefixSize / chunk))
+  })
+
+  it('大文件续传校验采到前缀末尾损坏时改为全量重传', async () => {
+    const chunk = 256 * 1024
+    const size = 12 * 1024 * 1024
+    const prefixSize = 10 * 1024 * 1024
+    const data = Buffer.alloc(size, 7)
+    const source = path.join(tempDir, 'big.bin')
+    await fs.writeFile(source, data)
+    const remoteTarget = '/remote/dest/big.bin'
+    const remotePart = `${remoteTarget}.filetrans-part`
+    const corrupted = Buffer.from(data.subarray(0, prefixSize))
+    corrupted[corrupted.length - 1] = 0
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(remotePart, corrupted)
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+
+    expect(fake.files.get(remoteTarget)?.equals(data)).toBe(true)
+    expect(fake.writeLog[0].offset).toBe(0)
+    expect(fake.readLog.length).toBeLessThan(Math.ceil(prefixSize / chunk))
   })
 })

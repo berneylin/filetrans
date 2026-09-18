@@ -111,6 +111,13 @@ export interface TransferFileProgress {
   speed: number
 }
 
+export interface TransferFailure {
+  id: number
+  name: string
+  path: string
+  error: string
+}
+
 export interface TransferGroup {
   id: string
   sessionId: string
@@ -124,6 +131,8 @@ export interface TransferGroup {
   transferredBytes: number
   speed: number
   activeFiles?: TransferFileProgress[]
+  failedFiles?: TransferFailure[]
+  failedCount?: number
   error?: string
   retryCount?: number
   startedAt: number

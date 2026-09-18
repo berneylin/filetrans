@@ -35,10 +35,10 @@ export function promptMakeDirectory(side: PaneSide): void {
   })
 }
 
-export function startRename(side: PaneSide): void {
-  const entries = paneSelectedEntries(side)
-  if (entries.length !== 1) return
-  const entry = entries[0]
+export function startRename(side: PaneSide, entries?: FileEntry[]): void {
+  const list = entries ?? paneSelectedEntries(side)
+  if (list.length !== 1) return
+  const entry = list[0]
   useUi.getState().startRename({ side, path: entry.path, name: entry.name })
 }
 
@@ -63,13 +63,13 @@ export async function commitRename(target: string, newName: string, side: PaneSi
   }
 }
 
-export async function deleteSelection(side: PaneSide): Promise<void> {
-  const entries = paneSelectedEntries(side)
-  if (entries.length === 0) return
-  const label = entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} 个项目`
+export async function deleteSelection(side: PaneSide, entries?: FileEntry[]): Promise<void> {
+  const list = entries ?? paneSelectedEntries(side)
+  if (list.length === 0) return
+  const label = list.length === 1 ? `“${list[0].name}”` : `${list.length} 个项目`
   if (!window.confirm(`确定要删除 ${label} 吗？此操作不可恢复。`)) return
   try {
-    const paths = entries.map((entry) => entry.path)
+    const paths = list.map((entry) => entry.path)
     if (side === 'local') await window.api.local.remove(paths)
     else await window.api.sftp.remove(requireSession(), paths)
     await paneRefresh(side)
@@ -78,10 +78,10 @@ export async function deleteSelection(side: PaneSide): Promise<void> {
   }
 }
 
-export function promptChmod(side: PaneSide): void {
-  const entries = paneSelectedEntries(side)
-  if (entries.length === 0) return
-  useUi.getState().setChmod({ side, entries })
+export function promptChmod(side: PaneSide, entries?: FileEntry[]): void {
+  const list = entries ?? paneSelectedEntries(side)
+  if (list.length === 0) return
+  useUi.getState().setChmod({ side, entries: list })
 }
 
 export async function applyChmod(target: ChmodTarget, mode: number): Promise<void> {
@@ -165,19 +165,19 @@ export function openContextMenu(
       label:
         side === 'local' ? `上传选中的 ${selected.length} 项` : `下载选中的 ${selected.length} 项`,
       disabled: !canTransfer,
-      onClick: () => transferSelection(side)
+      onClick: () => void transferEntries(side, selected)
     })
   }
   if (items.length > 0) items.push({ separator: true })
   items.push(
-    { label: '重命名', disabled: selected.length !== 1, onClick: () => startRename(side) },
+    { label: '重命名', disabled: selected.length !== 1, onClick: () => startRename(side, selected) },
     {
       label: '删除',
       danger: true,
       disabled: !hasSelection,
-      onClick: () => void deleteSelection(side)
+      onClick: () => void deleteSelection(side, selected)
     },
-    { label: '权限…', disabled: !hasSelection, onClick: () => promptChmod(side) },
+    { label: '权限…', disabled: !hasSelection, onClick: () => promptChmod(side, selected) },
     { separator: true },
     { label: '新建目录', onClick: () => promptMakeDirectory(side) },
     { label: '刷新', onClick: () => void paneRefresh(side) }

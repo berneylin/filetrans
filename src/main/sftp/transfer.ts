@@ -34,7 +34,10 @@ const PARALLEL_READ_HWM = 256 * 1024
 const PARALLEL_WRITE_HWM = 256 * 1024
 const PART_SUFFIX = '.filetrans-part'
 const RESUME_VERIFY_BYTES = 256 * 1024
+const RESUME_VERIFY_FULL_LIMIT = 8 * 1024 * 1024
+const RESUME_VERIFY_SAMPLES = 8
 const MAX_FINISHED_GROUPS = 50
+const MAX_REPORTED_FAILURES = 50
 
 const DEFAULT_OPTIONS: TransferOptions = {
   resume: true,
@@ -93,6 +96,12 @@ interface Collected {
   links: LinkJob[]
 }
 
+interface JobFailure {
+  id: number
+  source: string
+  error: string
+}
+
 interface ScopeRoot {
   sourceRoot: string
   destRoot: string
@@ -116,6 +125,7 @@ interface GroupState {
   paused: boolean
   resumeConflicts: boolean
   error?: Error
+  failures: JobFailure[]
   aborts: Set<() => void>
   pauseWaiters: Set<() => void>
   flushTimer: NodeJS.Timeout
@@ -165,6 +175,29 @@ export function planParallelSegments(
 export function isParallelComplete(state: ParallelState, sourceSize: number): boolean {
   const written = state.base + state.segments.reduce((sum, seg) => sum + seg.written, 0)
   return written >= sourceSize
+}
+
+export interface ResumeVerifyRange {
+  start: number
+  end: number
+}
+
+export function planResumeVerify(offset: number): ResumeVerifyRange[] {
+  if (offset <= 0) return []
+  const blocks = Math.ceil(offset / RESUME_VERIFY_BYTES)
+  const indices: number[] = []
+  if (offset <= RESUME_VERIFY_FULL_LIMIT) {
+    for (let index = 0; index < blocks; index++) indices.push(index)
+  } else {
+    for (let sample = 0; sample < RESUME_VERIFY_SAMPLES; sample++) {
+      indices.push(Math.round((sample * (blocks - 1)) / (RESUME_VERIFY_SAMPLES - 1)))
+    }
+  }
+  const unique = [...new Set(indices)].sort((a, b) => a - b)
+  return unique.map((index) => {
+    const start = index * RESUME_VERIFY_BYTES
+    return { start, end: Math.min(offset, start + RESUME_VERIFY_BYTES) - 1 }
+  })
 }
 
 function delay(ms: number): Promise<void> {
@@ -401,6 +434,7 @@ export class TransferManager {
       cancelled: false,
       paused: false,
       resumeConflicts,
+      failures: [],
       aborts: new Set(),
       pauseWaiters: new Set(),
       flushTimer: setInterval(() => this.flush(state), FLUSH_INTERVAL_MS),
@@ -812,6 +846,12 @@ export class TransferManager {
     } else if (state.error) {
       group.status = 'error'
       group.error = state.error.message
+    } else if (state.failures.length > 0) {
+      group.status = 'error'
+      group.error =
+        state.failures.length === 1
+          ? `1 个文件失败：${state.failures[0].error}`
+          : `${state.failures.length} 个文件失败，首个失败原因：${state.failures[0].error}`
     } else {
       group.status = 'done'
       group.doneFiles = group.totalFiles
@@ -855,15 +895,24 @@ export class TransferManager {
         state.group.retryCount = 0
       } catch (err) {
         if (state.cancelled) return
-        state.error = err instanceof Error ? err : new Error(String(err))
-        state.cancelled = true
-        for (const abort of state.aborts) abort()
-        this.releasePauseWaiters(state)
-        return
+        state.group.retryCount = 0
+        this.recordFailure(state, job, err instanceof Error ? err.message : String(err))
+        this.emit(state)
       } finally {
         state.active.delete(job)
       }
     }
+  }
+
+  private recordFailure(state: GroupState, job: Job, message: string): void {
+    state.failures.push({ id: job.id, source: job.source, error: message })
+    state.group.failedCount = state.failures.length
+    state.group.failedFiles = state.failures.slice(0, MAX_REPORTED_FAILURES).map((failure) => ({
+      id: failure.id,
+      name: posixBasename(failure.source),
+      path: failure.source,
+      error: failure.error
+    }))
   }
 
   private async runJobWithRetry(state: GroupState, session: SftpSession, job: Job): Promise<void> {
@@ -930,17 +979,17 @@ export class TransferManager {
     destPath: string,
     offset: number
   ): Promise<boolean> {
-    for (let start = 0; start < offset; start += RESUME_VERIFY_BYTES) {
+    for (const range of planResumeVerify(offset)) {
       if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
-      const end = Math.min(offset, start + RESUME_VERIFY_BYTES) - 1
       try {
         const source = upload
-          ? await readLocalRange(job.source, start, end)
-          : await readRemoteRange(state, session, job.source, start, end)
+          ? await readLocalRange(job.source, range.start, range.end)
+          : await readRemoteRange(state, session, job.source, range.start, range.end)
         const dest = upload
-          ? await readRemoteRange(state, session, destPath, start, end)
-          : await readLocalRange(destPath, start, end)
-        if (!source || !dest || source.length !== end - start + 1 || !source.equals(dest)) {
+          ? await readRemoteRange(state, session, destPath, range.start, range.end)
+          : await readLocalRange(destPath, range.start, range.end)
+        const length = range.end - range.start + 1
+        if (!source || !dest || source.length !== length || !source.equals(dest)) {
           return false
         }
       } catch (err) {

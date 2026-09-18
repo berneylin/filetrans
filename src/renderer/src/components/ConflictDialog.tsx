@@ -23,7 +23,12 @@ export function ConflictDialog() {
   if (!conflict) return null
 
   return (
-    <Modal title="目标文件已存在" onClose={() => void resolveConflict('cancel')} width={560}>
+    <Modal
+      title="目标文件已存在"
+      onClose={() => void resolveConflict('cancel')}
+      width={560}
+      dismissible={false}
+    >
       <div className="text-gray-700">
         以下 {conflict.items.length} 个目标位置已存在同名文件：
         {conflicts.length > 1 && <span>（还有 {conflicts.length - 1} 个传输等待处理）</span>}

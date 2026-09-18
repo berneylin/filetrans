@@ -5,6 +5,7 @@ import { errorMessage } from '../utils/errors'
 import { sortEntries } from '../utils/sort'
 import { useSites } from './sites'
 import { useTransfers } from './transfers'
+import { useUi } from './ui'
 import { useVisits } from './visits'
 
 export type TabStatus = 'connecting' | 'connected' | 'disconnected'
@@ -76,6 +77,9 @@ interface TabsStore {
 }
 
 export const useTabs = create<TabsStore>((set, get) => {
+  const closing = new Set<string>()
+  const loadSeqs = new Map<string, number>()
+
   const patchTab = (id: string, patch: Partial<TabState>): void => {
     set((state) => ({
       tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab))
@@ -85,14 +89,18 @@ export const useTabs = create<TabsStore>((set, get) => {
   const load = async (id: string, target?: string): Promise<boolean> => {
     const tab = get().tabs.find((item) => item.id === id)
     if (!tab || !tab.sessionId || tab.status !== 'connected') return false
+    const seq = (loadSeqs.get(id) ?? 0) + 1
+    loadSeqs.set(id, seq)
     patchTab(id, { loading: true, error: null })
     try {
       const path = target || tab.path || (await window.api.sftp.home(tab.sessionId))
       const listing = await window.api.sftp.list(tab.sessionId, path)
+      if (loadSeqs.get(id) !== seq) return false
       patchTab(id, { path: listing.path, listing, loading: false, selected: [] })
       if (tab.siteId) useVisits.getState().recordRemote(tab.siteId, listing.path)
       return true
     } catch (err) {
+      if (loadSeqs.get(id) !== seq) return false
       patchTab(id, { loading: false, error: errorMessage(err) })
       return false
     }
@@ -135,6 +143,8 @@ export const useTabs = create<TabsStore>((set, get) => {
       if (!site) throw new Error('站点不存在')
       const tab = newTab(siteId, site.name || `${site.username}@${site.host}`)
       set((state) => ({ tabs: [...state.tabs, tab], activeId: tab.id }))
+      useUi.getState().closeMenu()
+      let sessionId: string | null = null
       try {
         const hasOverrides =
           overrides && (overrides.password !== undefined || overrides.passphrase !== undefined)
@@ -148,27 +158,40 @@ export const useTabs = create<TabsStore>((set, get) => {
               passphrase: overrides.passphrase
             })
           : await window.api.sftp.connectSite(siteId)
+        sessionId = session.sessionId
+        const stillOpen = get().tabs.some((item) => item.id === tab.id)
+        if (!stillOpen || closing.has(tab.id)) {
+          closing.delete(tab.id)
+          await window.api.sftp.disconnect(sessionId).catch(() => undefined)
+          return
+        }
         patchTab(tab.id, {
-          sessionId: session.sessionId,
+          sessionId,
           session,
           title: site.name || `${session.username}@${session.host}`,
           status: 'connected',
           error: null
         })
-        const home = await window.api.sftp.home(session.sessionId)
+        const home = await window.api.sftp.home(sessionId)
         const ok = await load(tab.id, site.remotePath || home)
         if (!ok && site.remotePath) await load(tab.id, home)
       } catch (err) {
         patchTab(tab.id, {
           status: 'disconnected',
           error: errorMessage(err),
-          loading: false
+          loading: false,
+          sessionId: undefined,
+          session: undefined
         })
+        if (sessionId) await window.api.sftp.disconnect(sessionId).catch(() => undefined)
       }
     },
 
     closeTab: async (id) => {
       const tab = get().tabs.find((item) => item.id === id)
+      if (tab?.status === 'connecting') closing.add(id)
+      loadSeqs.delete(id)
+      useUi.getState().closeMenu()
       if (tab?.sessionId) {
         const sessionId = tab.sessionId
         const activeGroups = useTransfers
@@ -182,7 +205,10 @@ export const useTabs = create<TabsStore>((set, get) => {
           const ok = window.confirm(
             `该标签有 ${activeGroups.length} 个进行中的传输，关闭将取消它们。确定关闭吗？`
           )
-          if (!ok) return
+          if (!ok) {
+            closing.delete(id)
+            return
+          }
           for (const group of activeGroups) await useTransfers.getState().cancel(group.id)
         }
         try {
@@ -202,7 +228,10 @@ export const useTabs = create<TabsStore>((set, get) => {
       })
     },
 
-    setActive: (id) => set({ activeId: id }),
+    setActive: (id) => {
+      useUi.getState().closeMenu()
+      set({ activeId: id })
+    },
 
     load,
     navigate,

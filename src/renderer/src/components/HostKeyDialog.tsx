@@ -16,7 +16,7 @@ export function HostKeyDialog() {
   }
 
   return (
-    <Modal title="未知主机密钥" onClose={() => respond(false, false)} width={520}>
+    <Modal title="未知主机密钥" onClose={() => respond(false, false)} width={520} dismissible={false}>
       <div className="space-y-2">
         <div className="text-gray-700">
           无法确认主机 <span className="font-semibold">{info.host}:{info.port}</span> 的身份。
