@@ -152,6 +152,22 @@ export function openContextMenu(
   x: number,
   y: number
 ): void {
+  if (!entry) {
+    const blank: MenuItem[] = [{ label: '新建目录', onClick: () => promptMakeDirectory(side) }]
+    if (side === 'local') {
+      blank.push({
+        label: '在文件浏览器中打开',
+        onClick: () => {
+          const current = readPane(side).path
+          if (current) void openInFileBrowser(current)
+        }
+      })
+    }
+    blank.push({ separator: true }, { label: '刷新', onClick: () => void paneRefresh(side) })
+    useUi.getState().showMenu(x, y, blank)
+    return
+  }
+
   const selected = paneSelectedEntries(side)
   const hasSelection = selected.length > 0
   const remoteReady = paneRemoteSessionId() !== null

@@ -23,6 +23,7 @@
     "src/renderer/src/**/*",
     "src/shared/**/*",
     "tests/renderer-connection.test.ts",
+    "tests/renderer-context-menu.test.ts",
     "tests/visits.test.ts"
   ]
 }

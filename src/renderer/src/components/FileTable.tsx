@@ -26,6 +26,8 @@ const TYPE_LABELS: Record<string, string> = {
   other: '其他'
 }
 
+const LIST_BOTTOM_PADDING = 48
+
 function parentEntry(parentPath: string): FileEntry {
   return {
     name: '..',
@@ -308,13 +310,22 @@ export function FileTable({ side }: { side: PaneSide }) {
             paneSetSelected(side, [])
           }
         }}
+        onContextMenu={(event) => {
+          if ((event.target as HTMLElement).closest('[data-row]')) return
+          event.preventDefault()
+          paneSetSelected(side, [])
+          openContextMenu(side, null, event.clientX, event.clientY)
+        }}
       >
         {rows.length === 0 ? (
           <div className="p-6 text-center text-gray-400">
             {pane.loading ? '加载中…' : '目录为空'}
           </div>
         ) : (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() + LIST_BOTTOM_PADDING }}
+          >
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const entry = rows[virtualRow.index]
               const isParent = entry.name === '..'

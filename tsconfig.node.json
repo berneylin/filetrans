@@ -25,5 +25,9 @@
     "electron.vite.config.ts",
     "vitest.config.ts"
   ],
-  "exclude": ["tests/renderer-connection.test.ts", "tests/visits.test.ts"]
+  "exclude": [
+    "tests/renderer-connection.test.ts",
+    "tests/renderer-context-menu.test.ts",
+    "tests/visits.test.ts"
+  ]
 }
