@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildRsyncArgs } from '../src/main/rsync/args'
+import { parseRsyncVersion } from '../src/main/rsync/detect'
 
 const RSYNC = '/usr/bin/rsync'
 
@@ -11,16 +12,16 @@ let root = ''
 let rsh = ''
 let argvFile = ''
 
-function rsyncAvailable(): boolean {
+function argProtectedRsync(): boolean {
   try {
-    execFileSync(RSYNC, ['--version'], { stdio: 'ignore' })
-    return true
+    const stdout = execFileSync(RSYNC, ['--version'], { encoding: 'utf8' })
+    return parseRsyncVersion(stdout)?.argProtected === true
   } catch {
     return false
   }
 }
 
-const describeMaybe = rsyncAvailable() ? describe : describe.skip
+const describeMaybe = argProtectedRsync() ? describe : describe.skip
 
 function lastRemoteArg(args: string[]): string {
   const result = spawnSync(RSYNC, args, { stdio: 'ignore' })
