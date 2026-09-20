@@ -12,6 +12,7 @@ export interface RsyncTargetOptions {
   compress: boolean
   modernGnu?: boolean
   progress2?: boolean
+  argProtected?: boolean
   zstd?: boolean
 }
 
@@ -29,6 +30,7 @@ function formatRemotePath(path: string, quote: boolean): string {
 export function buildRsyncArgs(t: RsyncTargetOptions): string[] {
   const gnu = t.modernGnu ?? true
   const progress2 = gnu && (t.progress2 ?? false)
+  const quote = !progress2 && !(t.argProtected ?? false)
   const args = gnu
     ? [
         '-a',
@@ -49,9 +51,9 @@ export function buildRsyncArgs(t: RsyncTargetOptions): string[] {
   const local = withTrailingSlash(t.localPath)
   const remote = `${t.user}@${t.host}:`
   if (t.direction === 'upload') {
-    args.push(local, `${remote}${formatRemotePath(t.remotePath, !progress2)}`)
+    args.push(local, `${remote}${formatRemotePath(t.remotePath, quote)}`)
   } else {
-    args.push(`${remote}${formatRemotePath(withTrailingSlash(t.remotePath), !progress2)}`, local)
+    args.push(`${remote}${formatRemotePath(withTrailingSlash(t.remotePath), quote)}`, local)
   }
   return args
 }

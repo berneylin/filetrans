@@ -122,3 +122,25 @@ describe('normalizeNameLine', () => {
     expect(normalizeNameLine('./')).toBe(null)
   })
 })
+
+describe('stdout 按 chunk 解码中文文件名', () => {
+  it('多字节字符跨 chunk 边界时 StringDecoder 不产生乱码', async () => {
+    const { StringDecoder } = await import('node:string_decoder')
+    const decoder = new StringDecoder('utf8')
+    const line = '文件.txt\n'
+    const bytes = Buffer.from(line, 'utf8')
+    const splitAt = bytes.indexOf(Buffer.from('件', 'utf8')[0]) + 1
+
+    const head = decoder.write(bytes.subarray(0, splitAt))
+    const tail = decoder.write(bytes.subarray(splitAt))
+    expect(head + tail).toBe(line)
+  })
+
+  it('按 chunk 独立 toString 会在边界处损坏（对照）', () => {
+    const bytes = Buffer.from('文件.txt\n', 'utf8')
+    const splitAt = bytes.indexOf(Buffer.from('件', 'utf8')[0]) + 1
+    const joined =
+      bytes.subarray(0, splitAt).toString('utf8') + bytes.subarray(splitAt).toString('utf8')
+    expect(joined).not.toBe('文件.txt\n')
+  })
+})

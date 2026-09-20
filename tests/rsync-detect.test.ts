@@ -10,6 +10,7 @@ describe('parseRsyncVersion', () => {
       dialect: 'openrsync',
       version: '2.6.9 compatible',
       modern: false,
+      argProtected: false,
       zstd: false
     })
   })
@@ -40,5 +41,19 @@ describe('parseRsyncVersion', () => {
   it('无法识别时返回 null', () => {
     expect(parseRsyncVersion('hello world')).toBe(null)
     expect(parseRsyncVersion('')).toBe(null)
+  })
+
+  it.each([
+    ['3.0.9', false, false],
+    ['3.1.0', true, false],
+    ['3.2.3', true, false],
+    ['3.2.4', true, true],
+    ['3.2.7', true, true],
+    ['3.4.1', true, true],
+    ['4.0.0', true, true]
+  ])('版本 %s 的 modern=%s、argProtected=%s', (version, modern, argProtected) => {
+    const info = parseRsyncVersion(`rsync  version ${version}  protocol version 32\nCapabilities:\n`)
+    expect(info?.modern).toBe(modern)
+    expect(info?.argProtected).toBe(argProtected)
   })
 })

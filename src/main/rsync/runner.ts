@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
 import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
@@ -46,6 +47,8 @@ interface SyncState {
   currentBytes: number
   lastBytes: number
   lastSpeedAt: number
+  closed: Promise<void>
+  resolveClosed: () => void
 }
 
 function pickTempRoot(): string {
@@ -135,95 +138,111 @@ export class RsyncManager {
     if (!spaceFree(tempDir)) throw new Error('临时目录路径包含空格，无法创建同步环境')
     await fs.mkdir(tempDir, { recursive: true, mode: 0o700 })
 
-    const knownHostsFile = path.join(tempDir, 'known_hosts')
-    const keyType = parseHostKeyAlgorithm(hostKeyBlob)
-    if (!keyType) throw new Error('无法识别主机公钥类型')
-    await fs.writeFile(
-      knownHostsFile,
-      knownHostsLine(params.host, params.port, keyType, hostKeyBlob.toString('base64')),
-      { mode: 0o600 }
-    )
-
-    const keyPath = params.privateKeyPath ? expandHome(params.privateKeyPath) : undefined
-    const configPath = path.join(tempDir, 'ssh_config')
-    await fs.writeFile(
-      configPath,
-      buildSshConfig({
-        host: params.host,
-        port: params.port,
-        user: params.username,
+    let job: SyncJob
+    let args: string[]
+    let env: NodeJS.ProcessEnv
+    let state: SyncState
+    try {
+      const knownHostsFile = path.join(tempDir, 'known_hosts')
+      const keyType = parseHostKeyAlgorithm(hostKeyBlob)
+      if (!keyType) throw new Error('无法识别主机公钥类型')
+      await fs.writeFile(
         knownHostsFile,
-        keyPath,
-        connectTimeout: 20
-      }),
-      { mode: 0o600 }
-    )
+        knownHostsLine(params.host, params.port, keyType, hostKeyBlob.toString('base64')),
+        { mode: 0o600 }
+      )
 
-    const rshPath = path.join(tempDir, 'rsh')
-    await fs.writeFile(rshPath, buildRshScript(configPath), { mode: 0o755 })
+      const keyPath = params.privateKeyPath ? expandHome(params.privateKeyPath) : undefined
+      const configPath = path.join(tempDir, 'ssh_config')
+      await fs.writeFile(
+        configPath,
+        buildSshConfig({
+          host: params.host,
+          port: params.port,
+          user: params.username,
+          knownHostsFile,
+          keyPath,
+          connectTimeout: 20
+        }),
+        { mode: 0o600 }
+      )
 
-    const secret = keyPath ? params.passphrase : params.password
-    let askpassPath: string | undefined
-    if (secret) {
-      askpassPath = path.join(tempDir, 'askpass')
-      await fs.writeFile(askpassPath, buildAskpassScript(), { mode: 0o700 })
-    }
+      const rshPath = path.join(tempDir, 'rsh')
+      await fs.writeFile(rshPath, buildRshScript(configPath), { mode: 0o755 })
 
-    const modernGnu = info.dialect === 'gnu' && info.modern
-    const progress2 = modernGnu && remote?.dialect === 'gnu' && remote.modern
-    const zstd = modernGnu && info.zstd && remote?.zstd === true
-    const args = buildRsyncArgs({
-      direction: req.direction,
-      localPath,
-      remotePath,
-      user: params.username,
-      host: params.host,
-      rsh: rshPath,
-      deleteExtraneous: options.deleteExtraneous,
-      exclude: options.exclude,
-      compress: options.compress,
-      modernGnu,
-      progress2,
-      zstd
-    })
+      const secret = keyPath ? params.passphrase : params.password
+      let askpassPath: string | undefined
+      if (secret) {
+        askpassPath = path.join(tempDir, 'askpass')
+        await fs.writeFile(askpassPath, buildAskpassScript(), { mode: 0o700 })
+      }
 
-    const env: NodeJS.ProcessEnv = { ...process.env }
-    delete env.SSH_ASKPASS
-    delete env.SSH_ASKPASS_REQUIRE
-    if (askpassPath) {
-      env.SSH_ASKPASS = askpassPath
-      env.SSH_ASKPASS_REQUIRE = 'force'
-      env.FILETRANS_SSH_SECRET = secret
-    }
+      const modernGnu = info.dialect === 'gnu' && info.modern
+      const progress2 = modernGnu && remote?.dialect === 'gnu' && remote.modern
+      const argProtected = modernGnu && info.argProtected
+      const zstd = modernGnu && info.zstd && remote?.zstd === true
+      args = buildRsyncArgs({
+        direction: req.direction,
+        localPath,
+        remotePath,
+        user: params.username,
+        host: params.host,
+        rsh: rshPath,
+        deleteExtraneous: options.deleteExtraneous,
+        exclude: options.exclude,
+        compress: options.compress,
+        modernGnu,
+        progress2,
+        argProtected,
+        zstd
+      })
 
-    const job: SyncJob = {
-      id,
-      direction: req.direction,
-      localPath,
-      remotePath,
-      status: 'running',
-      percent: 0,
-      transferredBytes: 0,
-      speed: 0,
-      transferredFiles: 0,
-      startedAt: Date.now()
-    }
-    const state: SyncState = {
-      job,
-      child: null,
-      cancelled: false,
-      logLines: [],
-      lastEmit: 0,
-      tempDir,
-      leftover: '',
-      dialect: info.dialect,
-      progress2,
-      completedBytes: 0,
-      completedFiles: 0,
-      totalFiles: null,
-      currentBytes: 0,
-      lastBytes: 0,
-      lastSpeedAt: Date.now()
+      env = { ...process.env }
+      delete env.SSH_ASKPASS
+      delete env.SSH_ASKPASS_REQUIRE
+      if (askpassPath) {
+        env.SSH_ASKPASS = askpassPath
+        env.SSH_ASKPASS_REQUIRE = 'force'
+        env.FILETRANS_SSH_SECRET = secret
+      }
+
+      job = {
+        id,
+        direction: req.direction,
+        localPath,
+        remotePath,
+        status: 'running',
+        percent: 0,
+        transferredBytes: 0,
+        speed: 0,
+        transferredFiles: 0,
+        startedAt: Date.now()
+      }
+      state = {
+        job,
+        child: null,
+        cancelled: false,
+        logLines: [],
+        lastEmit: 0,
+        tempDir,
+        leftover: '',
+        dialect: info.dialect,
+        progress2,
+        completedBytes: 0,
+        completedFiles: 0,
+        totalFiles: null,
+        currentBytes: 0,
+        lastBytes: 0,
+        lastSpeedAt: Date.now(),
+        closed: Promise.resolve(),
+        resolveClosed: () => undefined
+      }
+      state.closed = new Promise<void>((resolve) => {
+        state.resolveClosed = resolve
+      })
+    } catch (err) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+      throw err
     }
     this.jobs.set(id, state)
     this.emit(state)
@@ -252,9 +271,13 @@ export class RsyncManager {
       detached: true
     })
     state.child = child
-    child.stdout?.on('data', (chunk: Buffer) => this.consume(state, chunk, state.logLines))
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
+    child.stdout?.on('data', (chunk: Buffer) =>
+      this.consume(state, stdoutDecoder.write(chunk), state.logLines)
+    )
     child.stderr?.on('data', (chunk: Buffer) => {
-      this.appendLog(state.logLines, chunk.toString('utf8'))
+      this.appendLog(state.logLines, stderrDecoder.write(chunk))
     })
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (state.cancelled) return
@@ -263,6 +286,7 @@ export class RsyncManager {
       state.job.status = 'error'
       state.child = null
       state.job.finishedAt = Date.now()
+      state.resolveClosed()
       void this.cleanupTemp(state)
       this.emit(state)
     })
@@ -285,16 +309,16 @@ export class RsyncManager {
         state.job.error = state.job.error ?? `rsync 异常退出 (代码 ${code})`
       }
       state.child = null
-      state.job.percent = 100
+      if (state.job.status === 'done') state.job.percent = 100
       state.job.speed = 0
       state.job.finishedAt = Date.now()
+      state.resolveClosed()
       void this.cleanupTemp(state)
       this.emit(state)
     })
   }
 
-  private consume(state: SyncState, chunk: Buffer, logSink: string[]): void {
-    const text = chunk.toString('utf8')
+  private consume(state: SyncState, text: string, logSink: string[]): void {
     const combined = state.leftover + text
     const parts = combined.split(/[\r\n]/)
     state.leftover = parts.pop() ?? ''
@@ -420,7 +444,15 @@ export class RsyncManager {
   async killAll(): Promise<void> {
     const running = [...this.jobs.values()].filter((state) => state.job.status === 'running')
     for (const state of running) this.cancel(state.job.id)
-    if (running.length > 0) await new Promise((resolve) => setTimeout(resolve, 200))
+    if (running.length === 0) return
+    await Promise.all(
+      running.map((state) =>
+        Promise.race([
+          state.closed,
+          new Promise<void>((resolve) => setTimeout(resolve, KILL_GRACE_MS))
+        ])
+      )
+    )
   }
 
   private async cleanupTemp(state: SyncState): Promise<void> {

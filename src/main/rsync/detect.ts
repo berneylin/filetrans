@@ -9,6 +9,7 @@ export interface RsyncInfo {
   dialect: RsyncDialect
   version: string
   modern: boolean
+  argProtected: boolean
   zstd: boolean
   label: string
 }
@@ -17,6 +18,7 @@ export interface ParsedRsyncVersion {
   dialect: RsyncDialect
   version: string
   modern: boolean
+  argProtected: boolean
   zstd: boolean
 }
 
@@ -27,17 +29,25 @@ const PREFERRED_PATHS = ['/opt/homebrew/bin/rsync', '/usr/local/bin/rsync']
 export function parseRsyncVersion(stdout: string): ParsedRsyncVersion | null {
   if (/openrsync/i.test(stdout)) {
     const version = /rsync version ([\d.]+)/i.exec(stdout)?.[1] ?? 'unknown'
-    return { dialect: 'openrsync', version: `${version} compatible`, modern: false, zstd: false }
+    return {
+      dialect: 'openrsync',
+      version: `${version} compatible`,
+      modern: false,
+      argProtected: false,
+      zstd: false
+    }
   }
   const match = /rsync\s+version\s+(\d+)\.(\d+)\.(\d+)/i.exec(stdout)
   if (!match) return null
   const major = Number.parseInt(match[1], 10)
   const minor = Number.parseInt(match[2], 10)
+  const patch = Number.parseInt(match[3], 10)
   const compressList = /Compress list:\s*\n\s*([^\n]+)/.exec(stdout)?.[1] ?? ''
   return {
     dialect: 'gnu',
     version: `${match[1]}.${match[2]}.${match[3]}`,
     modern: major > 3 || (major === 3 && minor >= 1),
+    argProtected: major > 3 || (major === 3 && (minor > 2 || (minor === 2 && patch >= 4))),
     zstd: /zstd/.test(compressList)
   }
 }

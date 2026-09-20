@@ -14,10 +14,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   const transfers = new TransferManager(getWebContents, sessions)
   const syncs = new RsyncManager(getWebContents, sessions)
 
-  app.once('before-quit', () => {
+  let quitting = false
+  app.on('before-quit', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    quitting = true
     transfers.cancelAll()
-    void syncs.killAll()
-    void sessions.disconnectAll()
+    void (async () => {
+      try {
+        await syncs.killAll()
+        await sessions.disconnectAll()
+      } catch {
+        /* 退出清理失败不阻断退出 */
+      }
+      app.exit(0)
+    })()
   })
 
   ipcMain.handle(IPC.appPickFile, async (_event, options?: { title?: string }) => {

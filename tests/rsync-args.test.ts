@@ -120,17 +120,43 @@ describe('buildRsyncArgs', () => {
     expect(args[args.length - 1]).toBe('root@10.0.0.2:/mnt/my dir')
   })
 
-  it('远端不支持 progress2 时改用 --progress 并给特殊路径加引号', () => {
+  it('远端不支持 progress2 时改用 --progress；本地 rsync 自带参数转义时不加引号', () => {
     const args = buildRsyncArgs({
       ...base,
       direction: 'upload',
       progress2: false,
+      argProtected: true,
       remotePath: '/mnt/my dir'
     })
     expect(args).not.toContain('-s')
     expect(args).toContain('--progress')
     expect(args).not.toContain('--info=progress2,name')
+    expect(args[args.length - 1]).toBe('root@10.0.0.2:/mnt/my dir')
+  })
+
+  it('本地 rsync 低于 3.2.4 时仍需手工给特殊路径加引号', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'upload',
+      progress2: false,
+      argProtected: false,
+      remotePath: '/mnt/my dir'
+    })
+    expect(args).not.toContain('-s')
+    expect(args).toContain('--progress')
     expect(args[args.length - 1]).toBe("root@10.0.0.2:'/mnt/my dir'")
+  })
+
+  it('progress2 开启时即使本地无参数转义也不加引号（-s 走协议下发）', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'upload',
+      progress2: true,
+      argProtected: false,
+      remotePath: '/mnt/my dir'
+    })
+    expect(args).toContain('-s')
+    expect(args[args.length - 1]).toBe('root@10.0.0.2:/mnt/my dir')
   })
 
   it('远端无 zstd 时压缩降级为 -z', () => {
