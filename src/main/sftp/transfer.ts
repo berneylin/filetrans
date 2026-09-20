@@ -87,6 +87,7 @@ interface DirJob {
 }
 
 interface LinkJob {
+  id: number
   linkPath: string
   target: string
 }
@@ -460,6 +461,9 @@ export class TransferManager {
     jobs.forEach((job, index) => {
       job.id = index
     })
+    links.forEach((link, index) => {
+      link.id = jobs.length + index
+    })
     state.jobs = jobs
     state.dirs = collected.dirs
     state.links = links
@@ -679,6 +683,7 @@ export class TransferManager {
         const relative = path.relative(root.sourceRoot, resolved).split(path.sep).join('/')
         const remoteTarget = posixJoin(root.destRoot, relative)
         collected.links.push({
+          id: 0,
           linkPath: remoteLinkPath,
           target: path.isAbsolute(linkTarget)
             ? remoteTarget
@@ -702,7 +707,7 @@ export class TransferManager {
       }
       if (stats?.isDirectory()) {
         if (ctx.visited.has(resolved)) {
-          collected.links.push({ linkPath: remoteLinkPath, target: linkTarget })
+          collected.links.push({ id: 0, linkPath: remoteLinkPath, target: linkTarget })
           return
         }
         ctx.visited.add(resolved)
@@ -711,7 +716,7 @@ export class TransferManager {
         return
       }
     }
-    collected.links.push({ linkPath: remoteLinkPath, target: linkTarget })
+    collected.links.push({ id: 0, linkPath: remoteLinkPath, target: linkTarget })
   }
 
   private async collectDownloadJobs(
@@ -847,6 +852,7 @@ export class TransferManager {
         const relative = posixRelative(root.sourceRoot, resolved)
         const localTarget = path.join(root.destRoot, relative)
         collected.links.push({
+          id: 0,
           linkPath: localLinkPath,
           target:
             linkTarget && path.isAbsolute(linkTarget)
@@ -872,7 +878,7 @@ export class TransferManager {
       }
       if (stats && type === 'directory') {
         if (ctx.visited.has(resolved)) {
-          if (linkTarget) collected.links.push({ linkPath: localLinkPath, target: linkTarget })
+          if (linkTarget) collected.links.push({ id: 0, linkPath: localLinkPath, target: linkTarget })
           return null
         }
         ctx.visited.add(resolved)
@@ -884,7 +890,7 @@ export class TransferManager {
         return null
       }
     }
-    if (linkTarget) collected.links.push({ linkPath: localLinkPath, target: linkTarget })
+    if (linkTarget) collected.links.push({ id: 0, linkPath: localLinkPath, target: linkTarget })
     return null
   }
 
@@ -911,8 +917,17 @@ export class TransferManager {
         if (state.cancelled) break
         await this.waitWhilePaused(state)
         if (state.cancelled) break
-        await this.createSymlink(session, state, link)
-        group.doneFiles++
+        try {
+          await this.createSymlink(session, state, link)
+          group.doneFiles++
+        } catch (err) {
+          if (state.cancelled) break
+          this.recordFailure(
+            state,
+            { id: link.id, source: link.linkPath },
+            err instanceof Error ? err.message : String(err)
+          )
+        }
         this.emit(state)
       }
       const workerCount = Math.min(MAX_CONCURRENT_FILES, Math.max(1, state.jobs.length))
@@ -985,8 +1000,12 @@ export class TransferManager {
     }
   }
 
-  private recordFailure(state: GroupState, job: Job, message: string): void {
-    state.failures.push({ id: job.id, source: job.source, error: message })
+  private recordFailure(
+    state: GroupState,
+    entry: { id: number; source: string },
+    message: string
+  ): void {
+    state.failures.push({ id: entry.id, source: entry.source, error: message })
     state.group.failedCount = state.failures.length
     state.group.failedFiles = state.failures.slice(0, MAX_REPORTED_FAILURES).map((failure) => ({
       id: failure.id,

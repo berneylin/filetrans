@@ -26,13 +26,38 @@ function dataFile(name: string): string {
   return path.join(app.getPath('userData'), name)
 }
 
-async function readJson<T>(file: string, fallback: T, validate?: (value: unknown) => value is T): Promise<T> {
+const dataIssues: string[] = []
+
+export function consumeDataIssues(): string[] {
+  return dataIssues.splice(0, dataIssues.length)
+}
+
+async function quarantine(file: string): Promise<void> {
+  const backup = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
   try {
-    const raw = await fs.readFile(file, 'utf8')
+    await fs.rename(file, backup)
+    dataIssues.push(`数据文件 ${path.basename(file)} 已损坏，原件已保留为 ${path.basename(backup)}`)
+  } catch {
+    dataIssues.push(`数据文件 ${path.basename(file)} 已损坏且无法保留原件`)
+  }
+}
+
+async function readJson<T>(file: string, fallback: T, validate?: (value: unknown) => value is T): Promise<T> {
+  let raw: string
+  try {
+    raw = await fs.readFile(file, 'utf8')
+  } catch {
+    return fallback
+  }
+  try {
     const parsed: unknown = JSON.parse(raw)
-    if (validate && !validate(parsed)) return fallback
+    if (validate && !validate(parsed)) {
+      await quarantine(file)
+      return fallback
+    }
     return parsed as T
   } catch {
+    await quarantine(file)
     return fallback
   }
 }
@@ -63,10 +88,11 @@ export function encryptionAvailable(): boolean {
   }
 }
 
-function encryptSecret(secret: { password?: string; passphrase?: string }): string | undefined {
-  const payload = JSON.stringify(secret)
-  if (!encryptionAvailable()) return undefined
-  return safeStorage.encryptString(payload).toString('base64')
+function encryptSecret(secret: { password?: string; passphrase?: string }): string {
+  if (!encryptionAvailable()) {
+    throw new Error('当前系统没有可用的密钥环，无法加密保存密码/口令（请取消勾选“记住密码”后重试）')
+  }
+  return safeStorage.encryptString(JSON.stringify(secret)).toString('base64')
 }
 
 function decryptSecret(value: string): { password?: string; passphrase?: string } {
@@ -76,7 +102,7 @@ function decryptSecret(value: string): { password?: string; passphrase?: string 
       passphrase?: string
     }
   } catch {
-    return {}
+    throw new Error('无法解密已保存的凭据，请重新输入密码/口令')
   }
 }
 
@@ -103,7 +129,7 @@ export async function saveSite(input: SiteInput): Promise<SiteConfig> {
   if (!input.rememberSecret) {
     secret = undefined
   } else if (input.password !== undefined || input.passphrase !== undefined) {
-    secret = encryptSecret({ password: input.password, passphrase: input.passphrase }) ?? secret
+    secret = encryptSecret({ password: input.password, passphrase: input.passphrase })
   }
 
   const site: StoredSite = {

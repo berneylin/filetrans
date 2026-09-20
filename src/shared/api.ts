@@ -43,6 +43,7 @@ export interface FileTransApi {
     save(input: SiteInput): Promise<SiteConfig>
     remove(id: string): Promise<void>
     security(): Promise<{ encryptionAvailable: boolean }>
+    dataIssues(): Promise<string[]>
   }
   transfers: {
     start(req: TransferStartRequest): Promise<string>

@@ -6,7 +6,7 @@ import { SessionManager } from './sftp/manager'
 import { checkPrivateKey } from './sftp/session'
 import { TransferManager } from './sftp/transfer'
 import { RsyncManager } from './rsync/runner'
-import { deleteSite, encryptionAvailable, getSiteWithSecret, listSites, saveSite } from './storage'
+import { deleteSite, consumeDataIssues, encryptionAvailable, getSiteWithSecret, listSites, saveSite } from './storage'
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   const getWebContents = () => getWindow()?.webContents ?? null
@@ -103,6 +103,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.sitesSave, (_event, input: SiteInput) => saveSite(input))
   ipcMain.handle(IPC.sitesDelete, (_event, id: string) => deleteSite(id))
   ipcMain.handle(IPC.sitesSecurity, () => ({ encryptionAvailable: encryptionAvailable() }))
+  ipcMain.handle(IPC.sitesDataIssues, () => consumeDataIssues())
 
   ipcMain.handle(IPC.transferStart, (_event, req: TransferStartRequest) => transfers.start(req))
   ipcMain.handle(IPC.transferCancel, (_event, id: string) => transfers.cancel(id))

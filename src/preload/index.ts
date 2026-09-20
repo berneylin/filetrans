@@ -58,7 +58,8 @@ const api: FileTransApi = {
     list: () => invoke(IPC.sitesList),
     save: (input) => invoke(IPC.sitesSave, input),
     remove: (id) => invoke(IPC.sitesDelete, id),
-    security: () => invoke(IPC.sitesSecurity)
+    security: () => invoke(IPC.sitesSecurity),
+    dataIssues: () => invoke<string[]>(IPC.sitesDataIssues)
   },
 
   transfers: {

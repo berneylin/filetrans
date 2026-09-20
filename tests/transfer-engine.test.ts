@@ -96,6 +96,7 @@ class FakeSession {
   listDelayMs = 0
   activeLists = 0
   maxActiveLists = 0
+  failSymlinkFor: string[] = []
 
   private entryStats(target: string): FakeStats {
     const file = this.files.get(target)
@@ -190,6 +191,9 @@ class FakeSession {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
+    if (this.failSymlinkFor.includes(linkPath)) {
+      throw new Error('模拟远端拒绝创建符号链接')
+    }
     this.links.set(linkPath, target)
   }
 
@@ -1098,5 +1102,35 @@ describe('传输引擎', () => {
     manager.cancel(id)
     await waitFor(() => latest(events, id)?.status === 'cancelled', 30000)
     expect(fsSyncExists(path.join(tempDir, 'slow'))).toBe(false)
+  }, 30000)
+  it('符号链接创建失败不影响同组其余文件与链接', async () => {
+    const local = path.join(tempDir, 'pkg')
+    await fs.mkdir(local, { recursive: true })
+    await fs.writeFile(path.join(local, 'a.bin'), Buffer.alloc(2048, 1))
+    await fs.writeFile(path.join(local, 'b.bin'), Buffer.alloc(2048, 2))
+    await fs.symlink('/nonexistent/one', path.join(local, 'bad-link'))
+    await fs.symlink('/nonexistent/two', path.join(local, 'good-link'))
+
+    const { fake, events, manager } = makeHarness()
+    fake.failSymlinkFor = ['/remote/dest/pkg/bad-link.filetrans-part']
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [local],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: false, retries: 0, concurrency: 1, ...OFF_ATTRS }
+    })
+
+    await waitFor(() => latest(events, id)?.status === 'error', 30000)
+    const final = latest(events, id)
+    expect(fake.files.get('/remote/dest/pkg/a.bin')?.length).toBe(2048)
+    expect(fake.files.get('/remote/dest/pkg/b.bin')?.length).toBe(2048)
+    expect(fake.links.get('/remote/dest/pkg/good-link')).toBe('/nonexistent/two')
+    expect(fake.links.has('/remote/dest/pkg/bad-link')).toBe(false)
+    expect(final?.status).toBe('error')
+    expect(final?.failedCount).toBe(1)
+    expect(final?.failedFiles?.[0].path).toBe('/remote/dest/pkg/bad-link')
   }, 30000)
 })

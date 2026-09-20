@@ -24,6 +24,7 @@ export const IPC = {
   sitesSave: 'sites:save',
   sitesDelete: 'sites:delete',
   sitesSecurity: 'sites:security',
+  sitesDataIssues: 'sites:data-issues',
 
   transferStart: 'transfer:start',
   transferCancel: 'transfer:cancel',

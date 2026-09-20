@@ -56,6 +56,7 @@ export function SiteManagerDialog() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [encryptionAvailable, setEncryptionAvailable] = useState(true)
+  const [dataIssues, setDataIssues] = useState<string[]>([])
   const nameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -65,6 +66,10 @@ export function SiteManagerDialog() {
       .security()
       .then((result) => setEncryptionAvailable(result.encryptionAvailable))
       .catch(() => setEncryptionAvailable(true))
+    void window.api.sites
+      .dataIssues()
+      .then((issues) => setDataIssues(issues))
+      .catch(() => setDataIssues([]))
     setError(null)
   }, [open, loadSites])
 
@@ -350,16 +355,22 @@ export function SiteManagerDialog() {
           <label className="flex items-center gap-2 pl-[98px]">
             <input
               type="checkbox"
-              checked={form.rememberSecret}
+              checked={form.rememberSecret && encryptionAvailable}
+              disabled={!encryptionAvailable}
               onChange={(event) => patch({ rememberSecret: event.target.checked })}
             />
             记住密码/口令（使用系统密钥环加密）
           </label>
           {!encryptionAvailable && (
             <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-700">
-              当前系统没有可用的密钥环，密码/口令将无法安全保存。
+              当前系统没有可用的密钥环，无法加密保存密码/口令，请取消勾选“记住密码”。
             </div>
           )}
+          {dataIssues.map((issue) => (
+            <div key={issue} className="rounded border border-red-300 bg-red-50 p-2 text-red-700">
+              {issue}
+            </div>
+          ))}
           {error && <div className="text-red-600">{error}</div>}
           <div className="flex justify-end gap-2 pt-1">
             {form.id && (
