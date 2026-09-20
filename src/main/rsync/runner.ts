@@ -108,6 +108,9 @@ export class RsyncManager {
     const localPath = req.localPath.trim()
     let remotePath = req.remotePath.trim()
     if (!localPath || !remotePath) throw new Error('本地目录与远程目录均不能为空')
+    if (req.direction !== 'upload' && req.direction !== 'download') {
+      throw new Error('无效的同步方向')
+    }
 
     const upload = req.direction === 'upload'
     if (upload) {

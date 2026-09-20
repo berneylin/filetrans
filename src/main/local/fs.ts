@@ -2,7 +2,8 @@ import { promises as fs, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { DirListing, EntryType, FileEntry } from '@shared/types'
-import { validateDirectoryPath } from '@shared/path'
+import { validateDirectoryPath, escapesParent } from '@shared/path'
+import { assertPermissionMode } from '@shared/format'
 
 function friendlyError(err: unknown, target: string): Error {
   const code = (err as NodeJS.ErrnoException)?.code
@@ -95,7 +96,9 @@ export async function listLocal(dirPath: string): Promise<DirListing> {
 }
 
 export async function makeDir(parent: string, name: string): Promise<string> {
-  const target = path.resolve(parent, validateDirectoryPath(name))
+  const requested = validateDirectoryPath(name)
+  if (escapesParent(parent, requested)) throw new Error('无效的目录路径')
+  const target = path.resolve(parent, requested)
   try {
     await fs.mkdir(target, { recursive: true })
   } catch (err) {
@@ -115,7 +118,14 @@ export async function renameEntry(target: string, newName: string): Promise<stri
   return dest
 }
 
+function assertPathList(paths: unknown): asserts paths is string[] {
+  if (!Array.isArray(paths) || paths.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error('无效的文件列表')
+  }
+}
+
 export async function removeEntries(paths: string[]): Promise<void> {
+  assertPathList(paths)
   for (const target of paths) {
     assertSafeTarget(target)
     try {
@@ -127,6 +137,7 @@ export async function removeEntries(paths: string[]): Promise<void> {
 }
 
 export async function chmodEntry(target: string, mode: number): Promise<void> {
+  assertPermissionMode(mode)
   try {
     await fs.chmod(target, mode)
   } catch (err) {

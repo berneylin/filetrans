@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assertPermissionMode,
   bitsToMode,
   formatDate,
   formatEta,
@@ -91,5 +92,21 @@ describe('formatEta', () => {
   })
   it('超过一天显示上限', () => {
     expect(formatEta(25 * 3600 * 1024, 1024)).toBe('剩余 > 1 天')
+  })
+})
+
+describe('assertPermissionMode', () => {
+  it('接受 0..0o7777 内的整数', () => {
+    expect(assertPermissionMode(0)).toBe(0)
+    expect(assertPermissionMode(0o755)).toBe(0o755)
+    expect(assertPermissionMode(0o4755)).toBe(0o4755)
+  })
+
+  it('拒绝非整数、负数与超范围值', () => {
+    expect(() => assertPermissionMode(-1)).toThrow('无效的权限值')
+    expect(() => assertPermissionMode(0o10000)).toThrow('无效的权限值')
+    expect(() => assertPermissionMode(1.5)).toThrow('无效的权限值')
+    expect(() => assertPermissionMode(Number.NaN)).toThrow('无效的权限值')
+    expect(() => assertPermissionMode('755' as unknown as number)).toThrow('无效的权限值')
   })
 })

@@ -58,6 +58,11 @@ describe.each([
     expect((await fs.stat(target)).isDirectory()).toBe(true)
   })
 
+  it.each(['../escaped', '../../escaped'])('拒绝穿越父目录：%s', async (input) => {
+    await expect(mkdir(root, input)).rejects.toThrow('无效的目录路径')
+    expect(await fs.readdir(root)).toEqual([])
+  })
+
   it.each(['blocked', 'blocked/child'])('路径被普通文件占用时保留文件并报错：%s', async (input) => {
     await fs.writeFile(path.join(root, 'blocked'), '不能覆盖')
     await expect(mkdir(root, input)).rejects.toThrow()

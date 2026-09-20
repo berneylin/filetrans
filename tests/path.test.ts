@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  escapesParent,
   posixBasename,
   posixDirname,
   posixJoin,
@@ -73,5 +74,26 @@ describe('posixRelative', () => {
   })
   it('绝对与相对不匹配时返回原路径', () => {
     expect(posixRelative('/dst/a', 'b/c')).toBe('b/c')
+  })
+})
+
+describe('escapesParent', () => {
+  it('拒绝相对路径穿越到父目录之外', () => {
+    expect(escapesParent('/home/user', '../escaped')).toBe(true)
+    expect(escapesParent('/home/user', '../../etc')).toBe(true)
+    expect(escapesParent('/a/b/c', '..')).toBe(true)
+  })
+
+  it('允许目录内的多级与自引用', () => {
+    expect(escapesParent('/home/user', '项目/新 目录/输出')).toBe(false)
+    expect(escapesParent('/home/user', ' a//b/c/ ')).toBe(false)
+    expect(escapesParent('/home/user', 'a/../b')).toBe(false)
+    expect(escapesParent('/home/user', '.')).toBe(false)
+    expect(escapesParent('/home/user', '')).toBe(false)
+  })
+
+  it('绝对路径不视为穿越（按既定行为单独处理）', () => {
+    expect(escapesParent('/home/user', '/mnt/data')).toBe(false)
+    expect(escapesParent('/home/user', '/etc')).toBe(false)
   })
 })

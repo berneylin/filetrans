@@ -90,8 +90,8 @@ export const useFiles = create<FilesStore>((set, get) => {
     const pane = get().local
     const target = pane.back[pane.back.length - 1]
     if (!target) return
-    patchPane({ back: pane.back.slice(0, -1) })
-    await load(target)
+    const ok = await load(target)
+    if (ok) patchPane({ back: pane.back.slice(0, -1) })
   }
 
   return {

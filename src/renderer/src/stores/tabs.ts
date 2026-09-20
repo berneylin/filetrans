@@ -79,6 +79,7 @@ interface TabsStore {
 export const useTabs = create<TabsStore>((set, get) => {
   const closing = new Set<string>()
   const loadSeqs = new Map<string, number>()
+  const superseded = new Set<string>()
 
   const patchTab = (id: string, patch: Partial<TabState>): void => {
     set((state) => ({
@@ -95,12 +96,19 @@ export const useTabs = create<TabsStore>((set, get) => {
     try {
       const path = target || tab.path || (await window.api.sftp.home(tab.sessionId))
       const listing = await window.api.sftp.list(tab.sessionId, path)
-      if (loadSeqs.get(id) !== seq) return false
+      if (loadSeqs.get(id) !== seq) {
+        superseded.add(id)
+        return false
+      }
       patchTab(id, { path: listing.path, listing, loading: false, selected: [] })
+      superseded.delete(id)
       if (tab.siteId) useVisits.getState().recordRemote(tab.siteId, listing.path)
       return true
     } catch (err) {
-      if (loadSeqs.get(id) !== seq) return false
+      if (loadSeqs.get(id) !== seq) {
+        superseded.add(id)
+        return false
+      }
       patchTab(id, { loading: false, error: errorMessage(err) })
       return false
     }
@@ -125,8 +133,8 @@ export const useTabs = create<TabsStore>((set, get) => {
     if (!tab) return
     const target = tab.back[tab.back.length - 1]
     if (!target) return
-    patchTab(id, { back: tab.back.slice(0, -1) })
-    await load(id, target)
+    const ok = await load(id, target)
+    if (ok) patchTab(id, { back: tab.back.slice(0, -1) })
   }
 
   return {
@@ -174,7 +182,9 @@ export const useTabs = create<TabsStore>((set, get) => {
         })
         const home = await window.api.sftp.home(sessionId)
         const ok = await load(tab.id, site.remotePath || home)
-        if (!ok && site.remotePath) await load(tab.id, home)
+        if (!ok && site.remotePath && !superseded.has(tab.id)) {
+          await load(tab.id, home)
+        }
       } catch (err) {
         patchTab(tab.id, {
           status: 'disconnected',
@@ -191,6 +201,7 @@ export const useTabs = create<TabsStore>((set, get) => {
       const tab = get().tabs.find((item) => item.id === id)
       if (tab?.status === 'connecting') closing.add(id)
       loadSeqs.delete(id)
+      superseded.delete(id)
       useUi.getState().closeMenu()
       if (tab?.sessionId) {
         const sessionId = tab.sessionId

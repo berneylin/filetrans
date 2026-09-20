@@ -71,11 +71,7 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
       })
     } catch (err) {
       const message = errorMessage(err)
-      if (!message.includes('已取消') && !message.includes('跳过')) {
-        set({ error: message })
-      } else if (message.includes('跳过')) {
-        set({ error: message })
-      }
+      if (!message.includes('已取消')) set({ error: message })
     }
   },
 

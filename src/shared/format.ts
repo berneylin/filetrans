@@ -42,6 +42,13 @@ export function octalToMode(octal: string): number {
   return parsed
 }
 
+export function assertPermissionMode(mode: number): number {
+  if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+    throw new Error(`无效的权限值: ${mode}`)
+  }
+  return mode
+}
+
 export interface PermissionBits {
   owner: { read: boolean; write: boolean; execute: boolean }
   group: { read: boolean; write: boolean; execute: boolean }

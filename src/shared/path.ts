@@ -68,3 +68,12 @@ export function posixRelative(from: string, to: string): string {
   ]
   return parts.length > 0 ? parts.join('/') : '.'
 }
+
+export function escapesParent(parent: string, name: string): boolean {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed.startsWith('/')) return false
+  const parentNormalized = posixNormalize(parent)
+  const resolved = posixJoin(parentNormalized, trimmed)
+  const prefix = parentNormalized.endsWith('/') ? parentNormalized : `${parentNormalized}/`
+  return resolved !== parentNormalized && !resolved.startsWith(prefix)
+}

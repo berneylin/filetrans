@@ -4,8 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { Client, utils, type SFTPWrapper, type Stats } from 'ssh2'
 import type { ConnectParams, DirListing, EntryType, FileEntry, HostKeyInfo, KeyCheckResult } from '@shared/types'
-import { typeFromMode } from '@shared/format'
-import { posixDirname, posixJoin, posixNormalize, posixParent, validateDirectoryPath } from '@shared/path'
+import { typeFromMode, assertPermissionMode } from '@shared/format'
+import { posixDirname, posixJoin, posixNormalize, posixParent, validateDirectoryPath, escapesParent } from '@shared/path'
 import { validateName } from '../local/fs'
 import { replaceWithRollback } from '../replace'
 
@@ -291,6 +291,7 @@ export class SftpSession extends EventEmitter {
 
   async makeDir(parent: string, name: string): Promise<string> {
     const directory = validateDirectoryPath(name)
+    if (escapesParent(parent, directory)) throw new Error('无效的目录路径')
     const target = directory.startsWith('/') ? posixNormalize(directory) : posixJoin(parent, directory)
     await this.mkdirp(target)
     return target
@@ -322,6 +323,9 @@ export class SftpSession extends EventEmitter {
   }
 
   async removeEntries(paths: string[]): Promise<void> {
+    if (!Array.isArray(paths) || paths.some((item) => typeof item !== 'string' || !item.trim())) {
+      throw new Error('无效的文件列表')
+    }
     for (const target of paths) {
       if (posixNormalize(target) === '/') throw new Error('拒绝删除根目录')
       await this.removeEntry(target)
@@ -344,6 +348,7 @@ export class SftpSession extends EventEmitter {
   }
 
   async chmodEntry(target: string, mode: number): Promise<void> {
+    assertPermissionMode(mode)
     await this.call((cb) => this.channel.chmod(target, mode, cb))
   }
 

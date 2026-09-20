@@ -192,3 +192,74 @@ describe('标签页打开站点时使用默认路径', () => {
     expect(useTabs.getState().activeTab()?.back).toEqual(['/home/test', '/data'])
   })
 })
+
+describe('标签导航竞态与历史', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.stubGlobal('localStorage', makeStorage())
+  })
+
+  it('初始默认路径被更新导航抢占时不回退到主目录', async () => {
+    const list = vi.fn(async (_sessionId: string, target: string) => {
+      if (target === '/data/www') {
+        await new Promise((r) => setTimeout(r, 10))
+        const tabs = await import('../src/renderer/src/stores/tabs')
+        const nav = tabs.useTabs.getState().navigate(tabs.useTabs.getState().activeId ?? '', '/user/dir')
+        await new Promise((r) => setTimeout(r, 30))
+        await nav
+        return { path: target, parent: '/', entries: [] }
+      }
+      return { path: target, parent: '/', entries: [] }
+    })
+    const api = {
+      sftp: {
+        connectSite: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        connect: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        disconnect: vi.fn(async () => undefined),
+        home: vi.fn(async () => '/home/test'),
+        list
+      },
+      sites: { list: vi.fn(async () => [makeSite({ remotePath: '/data/www' })]) }
+    }
+    installWindow(api)
+    const { useSites } = await import('../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    await useSites.getState().loadSites()
+    await useTabs.getState().openSite('site-1')
+
+    expect(useTabs.getState().activeTab()?.path).toBe('/user/dir')
+  })
+
+  it('返回失败时历史项保留', async () => {
+    let allowHome = true
+    const list = vi.fn(async (_s: string, target: string) => {
+      if (target === '/home/test' && !allowHome) throw new Error('权限不足')
+      return { path: target, parent: '/', entries: [] }
+    })
+    const api = {
+      sftp: {
+        connectSite: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        connect: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        disconnect: vi.fn(async () => undefined),
+        home: vi.fn(async () => '/home/test'),
+        list
+      },
+      sites: { list: vi.fn(async () => [makeSite()]) }
+    }
+    installWindow(api)
+    const { useSites } = await import('../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    await useSites.getState().loadSites()
+    await useTabs.getState().openSite('site-1')
+    const id = useTabs.getState().activeTab()?.id ?? ''
+
+    await useTabs.getState().navigate(id, '/data')
+    expect(useTabs.getState().activeTab()?.back).toEqual(['/home/test'])
+
+    allowHome = false
+    await useTabs.getState().goBack(id)
+    const tab = useTabs.getState().activeTab()
+    expect(tab?.path).toBe('/data')
+    expect(tab?.back).toEqual(['/home/test'])
+  })
+})
