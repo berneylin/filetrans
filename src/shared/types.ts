@@ -133,6 +133,7 @@ export interface TransferGroup {
   activeFiles?: TransferFileProgress[]
   failedFiles?: TransferFailure[]
   failedCount?: number
+  collecting?: boolean
   error?: string
   retryCount?: number
   startedAt: number

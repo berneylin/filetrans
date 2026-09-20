@@ -7,7 +7,8 @@ import { Readable, Writable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { WebContents } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { ConflictPrompt, ConflictResolution, TransferGroup } from '@shared/types'
+import { typeFromMode } from '@shared/format'
+import type { ConflictPrompt, ConflictResolution, DirListing, FileEntry, TransferGroup } from '@shared/types'
 import type { SessionManager } from '../src/main/sftp/manager'
 import {
   PARALLEL_MIN_BYTES,
@@ -92,6 +93,9 @@ class FakeSession {
   failNextReadAfter: number | null = null
   activeReads = 0
   maxActiveReads = 0
+  listDelayMs = 0
+  activeLists = 0
+  maxActiveLists = 0
 
   private entryStats(target: string): FakeStats {
     const file = this.files.get(target)
@@ -102,6 +106,52 @@ class FakeSession {
 
   async stat(target: string): Promise<FakeStats> {
     return this.entryStats(target)
+  }
+
+  async realpath(target: string): Promise<string> {
+    return target
+  }
+
+  async readlink(target: string): Promise<string> {
+    const link = this.links.get(target)
+    if (link === undefined) throw new Error('No such file')
+    return link
+  }
+
+  list(target: string): Promise<DirListing> {
+    this.activeLists++
+    this.maxActiveLists = Math.max(this.maxActiveLists, this.activeLists)
+    return new Promise((resolve, reject) => {
+      setTimeout(() => {
+        this.activeLists--
+        if (!this.dirs.has(target)) {
+          reject(new Error('No such file'))
+          return
+        }
+        const parentOf = (p: string): string => p.slice(0, p.lastIndexOf('/'))
+        const entry = (key: string, mode: number, size: number): FileEntry => ({
+          name: key.slice(key.lastIndexOf('/') + 1),
+          path: key,
+          type: typeFromMode(mode),
+          size,
+          mtime: 1700000000000,
+          atime: 1700000000000,
+          mode,
+          isSymlink: typeFromMode(mode) === 'symlink'
+        })
+        const entries: FileEntry[] = []
+        for (const [key, buf] of this.files) {
+          if (parentOf(key) === target) entries.push(entry(key, 0o100640, buf.length))
+        }
+        for (const key of this.links.keys()) {
+          if (parentOf(key) === target) entries.push(entry(key, 0o120777, 0))
+        }
+        for (const key of this.dirs) {
+          if (key !== target && parentOf(key) === target) entries.push(entry(key, 0o040755, 0))
+        }
+        resolve({ path: target, parent: parentOf(target), entries })
+      }, this.listDelayMs)
+    })
   }
 
   async lstat(target: string): Promise<FakeStats> {
@@ -968,4 +1018,85 @@ describe('传输引擎', () => {
     expect(fake.writeLog[0].offset).toBe(0)
     expect(fake.readLog.length).toBeLessThan(Math.ceil(prefixSize / chunk))
   })
+
+  it('start 立即返回收集中的传输组', async () => {
+    const { fake, events, manager } = makeHarness()
+    fake.dirs.add('/remote/src/slow')
+    fake.files.set('/remote/src/slow/a.bin', Buffer.alloc(1024, 2))
+    fake.listDelayMs = 1500
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: ['/remote/src/slow'],
+      targetDir: tempDir,
+      recursive: true,
+      options: { resume: true, retries: 0, concurrency: 4, ...OFF_ATTRS }
+    })
+    const early = manager.list().find((group) => group.id === id)
+    expect(early?.status).toBe('pending')
+    expect(early?.collecting).toBe(true)
+    expect(early?.totalFiles).toBe(0)
+
+    await waitFor(() => latest(events, id)?.status === 'done', 30000)
+    expect((await fs.readFile(path.join(tempDir, 'slow/a.bin'))).length).toBe(1024)
+    expect(latest(events, id)?.collecting).toBeFalsy()
+  }, 30000)
+
+  it('下载目录树并行展开，文件层级与内容一致', async () => {
+    const { fake, events, manager } = makeHarness()
+    const root = '/remote/src/tree'
+    fake.dirs.add(root)
+    const data = randomBytes(2048)
+    for (let index = 0; index < 6; index++) {
+      fake.dirs.add(`${root}/d${index}`)
+      fake.files.set(`${root}/d${index}/f${index}.bin`, Buffer.from(data))
+    }
+    fake.dirs.add(`${root}/deep`)
+    fake.dirs.add(`${root}/deep/inner`)
+    fake.files.set(`${root}/deep/inner/n.bin`, Buffer.from(data))
+    fake.files.set(`${root}/top.bin`, Buffer.from(data))
+    fake.listDelayMs = 5
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: [root],
+      targetDir: tempDir,
+      recursive: true,
+      options: { resume: true, retries: 0, concurrency: 4, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done', 30000)
+    expect(fake.maxActiveLists).toBeGreaterThan(1)
+    expect(latest(events, id)?.totalFiles).toBe(8)
+    for (let index = 0; index < 6; index++) {
+      expect(
+        (await fs.readFile(path.join(tempDir, `tree/d${index}/f${index}.bin`))).equals(data)
+      ).toBe(true)
+    }
+    expect((await fs.readFile(path.join(tempDir, 'tree/top.bin'))).equals(data)).toBe(true)
+    expect(
+      (await fs.readFile(path.join(tempDir, 'tree/deep/inner/n.bin'))).equals(data)
+    ).toBe(true)
+  }, 30000)
+
+  it('取消收集中的传输组立即终止', async () => {
+    const { fake, events, manager } = makeHarness()
+    fake.dirs.add('/remote/src/slow')
+    fake.files.set('/remote/src/slow/a.bin', Buffer.alloc(1024, 2))
+    fake.listDelayMs = 3000
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: ['/remote/src/slow'],
+      targetDir: tempDir,
+      recursive: true,
+      options: { resume: true, retries: 0, concurrency: 4, ...OFF_ATTRS }
+    })
+    expect(manager.list().find((group) => group.id === id)?.collecting).toBe(true)
+    manager.cancel(id)
+    await waitFor(() => latest(events, id)?.status === 'cancelled', 30000)
+    expect(fsSyncExists(path.join(tempDir, 'slow'))).toBe(false)
+  }, 30000)
 })

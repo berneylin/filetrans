@@ -25,6 +25,7 @@ const MAX_CONCURRENT_FILES = 3
 const FLUSH_INTERVAL_MS = 300
 const CONFLICT_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_DEPTH = 128
+const WALK_CONCURRENCY = 16
 const RETRY_DELAY_MS = 2000
 const PERMISSION_MASK = 0o7777
 export const MAX_FILE_CONCURRENCY = 16
@@ -112,13 +113,21 @@ interface WalkContext {
   visited: Set<string>
 }
 
+interface RemoteWalkTask {
+  remote: string
+  local: string
+  depth: number
+}
+
 interface GroupState {
   group: TransferGroup
   options: TransferOptions
+  request: TransferStartRequest
   resolution?: ConflictResolution
   jobs: Job[]
   dirs: DirJob[]
   links: LinkJob[]
+  collecting: boolean
   active: Set<Job>
   cursor: number
   cancelled: boolean
@@ -339,20 +348,65 @@ export class TransferManager {
 
     const options: TransferOptions = { ...DEFAULT_OPTIONS, ...req.options }
     options.concurrency = clampConcurrency(options.concurrency)
+    const id = randomUUID()
+    const label =
+      req.sources.length === 1 ? posixBasename(req.sources[0]) : `${req.sources.length} 个项目`
+    const group: TransferGroup = {
+      id,
+      sessionId: req.sessionId,
+      direction: req.direction,
+      sourceLabel: label,
+      targetDir: req.targetDir,
+      status: 'pending',
+      totalFiles: 0,
+      doneFiles: 0,
+      totalBytes: 0,
+      transferredBytes: 0,
+      speed: 0,
+      retryCount: 0,
+      startedAt: Date.now(),
+      collecting: true
+    }
+    const now = Date.now()
+    const state: GroupState = {
+      group,
+      options,
+      request: req,
+      jobs: [],
+      dirs: [],
+      links: [],
+      collecting: true,
+      active: new Set(),
+      cursor: 0,
+      cancelled: false,
+      paused: false,
+      resumeConflicts: false,
+      failures: [],
+      aborts: new Set(),
+      pauseWaiters: new Set(),
+      flushTimer: setInterval(() => this.flush(state), FLUSH_INTERVAL_MS),
+      lastFlush: now,
+      lastBytes: 0
+    }
+    this.groups.set(id, state)
+    this.emit(state)
+    void this.run(state, session).catch(() => undefined)
+    return id
+  }
+
+  private async collectJobs(state: GroupState, session: SftpSession): Promise<void> {
+    const req = state.request
     const collected =
       req.direction === 'upload'
         ? await this.collectUploadJobs(req.sources, req.targetDir, req.recursive)
-        : await this.collectDownloadJobs(session, req.sources, req.targetDir, req.recursive)
-
+        : await this.collectDownloadJobs(session, req.sources, req.targetDir, req.recursive, state)
+    if (state.cancelled) throw new Error('传输已取消')
     if (collected.jobs.length === 0 && collected.dirs.length === 0 && collected.links.length === 0) {
       throw new Error('没有可传输的文件')
     }
 
-    const id = randomUUID()
     let jobs = collected.jobs
     let links = collected.links
-    let resumeConflicts = false
-    let resolution: ConflictResolution | undefined
 
     const targets = [...jobs.map((job) => job.target), ...links.map((link) => link.linkPath)]
     const conflicts: ConflictItem[] = []
@@ -382,8 +436,11 @@ export class TransferManager {
     }
 
     if (conflicts.length > 0) {
-      resolution = await this.askConflict(id, conflicts)
-      if (resolution === 'cancel') throw new Error('已取消传输')
+      const resolution = await this.askConflict(state.group.id, conflicts)
+      if (resolution === 'cancel') {
+        state.cancelled = true
+        return
+      }
       if (resolution === 'skip') {
         const skipSet = new Set(conflicts.map((conflict) => conflict.targetPath))
         jobs = jobs.filter((job) => !skipSet.has(job.target))
@@ -393,7 +450,8 @@ export class TransferManager {
           throw new Error('目标文件均已存在，已跳过全部传输')
         }
       }
-      resumeConflicts = resolution === 'resume'
+      state.resumeConflicts = resolution === 'resume'
+      state.resolution = resolution
       if (resolution === 'overwrite') {
         await this.cleanupParts(session, req.direction, targets)
       }
@@ -402,49 +460,11 @@ export class TransferManager {
     jobs.forEach((job, index) => {
       job.id = index
     })
-    const totalBytes = jobs.reduce((sum, job) => sum + job.size, 0)
-    const totalFiles = jobs.length + links.length
-    const label =
-      req.sources.length === 1 ? posixBasename(req.sources[0]) : `${req.sources.length} 个项目`
-    const group: TransferGroup = {
-      id,
-      sessionId: req.sessionId,
-      direction: req.direction,
-      sourceLabel: label,
-      targetDir: req.targetDir,
-      status: 'pending',
-      totalFiles,
-      doneFiles: 0,
-      totalBytes,
-      transferredBytes: 0,
-      speed: 0,
-      retryCount: 0,
-      startedAt: Date.now()
-    }
-    const now = Date.now()
-    const state: GroupState = {
-      group,
-      options,
-      resolution,
-      jobs,
-      dirs: collected.dirs,
-      links,
-      active: new Set(),
-      cursor: 0,
-      cancelled: false,
-      paused: false,
-      resumeConflicts,
-      failures: [],
-      aborts: new Set(),
-      pauseWaiters: new Set(),
-      flushTimer: setInterval(() => this.flush(state), FLUSH_INTERVAL_MS),
-      lastFlush: now,
-      lastBytes: 0
-    }
-    this.groups.set(id, state)
-    this.emit(state)
-    void this.run(state, session).catch(() => undefined)
-    return id
+    state.jobs = jobs
+    state.dirs = collected.dirs
+    state.links = links
+    state.group.totalFiles = jobs.length + links.length
+    state.group.totalBytes = jobs.reduce((sum, job) => sum + job.size, 0)
   }
 
   cancel(id: string): void {
@@ -698,10 +718,12 @@ export class TransferManager {
     session: SftpSession,
     sources: string[],
     targetDir: string,
-    recursive: boolean
+    recursive: boolean,
+    state: GroupState
   ): Promise<Collected> {
     const collected: Collected = { jobs: [], dirs: [], links: [] }
     const ctx: WalkContext = { roots: [], visited: new Set() }
+    const tasks: RemoteWalkTask[] = []
 
     for (const source of sources) {
       const stats = await session.stat(source)
@@ -713,7 +735,7 @@ export class TransferManager {
         ctx.roots.push({ sourceRoot: resolved, destRoot: target })
         ctx.visited.add(resolved)
         collected.dirs.push({ path: target, ...remoteAttributes(stats) })
-        await this.walkRemote(session, source, target, ctx, collected, 0)
+        tasks.push({ remote: source, local: target, depth: 0 })
       } else if (type === 'file') {
         collected.jobs.push(
           makeJob({
@@ -726,37 +748,84 @@ export class TransferManager {
         )
       }
     }
+    if (tasks.length > 0) {
+      await this.walkRemoteTree(session, tasks, ctx, collected, state)
+    }
     return collected
   }
 
-  private async walkRemote(
+  private async walkRemoteTree(
     session: SftpSession,
-    remoteDir: string,
-    localDir: string,
+    tasks: RemoteWalkTask[],
     ctx: WalkContext,
     collected: Collected,
-    depth: number
+    state: GroupState
   ): Promise<void> {
-    if (depth > MAX_DEPTH) return
-    const listing = await session.list(remoteDir)
-    for (const entry of listing.entries) {
-      const local = path.join(localDir, entry.name)
-      if (entry.isSymlink) {
-        await this.handleRemoteSymlink(session, entry.path, local, ctx, collected, depth)
-      } else if (entry.type === 'directory') {
-        collected.dirs.push({ path: local, ...entryAttributes(entry) })
-        await this.walkRemote(session, entry.path, local, ctx, collected, depth + 1)
-      } else if (entry.type === 'file') {
-        collected.jobs.push(
-          makeJob({
-            source: entry.path,
-            target: local,
-            size: entry.size,
-            transferred: 0,
-            ...entryAttributes(entry)
-          })
-        )
+    const scheduled = new Set(tasks.map((task) => task.remote))
+    let failure: Error | null = null
+    let activeCount = 0
+    const waiters: Array<() => void> = []
+    const acquire = (): Promise<void> =>
+      new Promise((resolve) => {
+        if (activeCount < WALK_CONCURRENCY) {
+          activeCount++
+          resolve()
+          return
+        }
+        waiters.push(() => {
+          activeCount++
+          resolve()
+        })
+      })
+    const release = (): void => {
+      const next = waiters.shift()
+      if (next) next()
+      else activeCount--
+    }
+
+    const runTask = async (task: RemoteWalkTask): Promise<void> => {
+      let children: Array<Promise<void>> = []
+      await acquire()
+      try {
+        if (!failure && !state.cancelled && task.depth <= MAX_DEPTH) {
+          const listing = await session.list(task.remote)
+          for (const entry of listing.entries) {
+            const local = path.join(task.local, entry.name)
+            if (entry.isSymlink) {
+              const next = await this.handleRemoteSymlink(
+                session, entry.path, local, task.depth, ctx, collected, scheduled
+              )
+              if (next) children.push(runTask(next))
+            } else if (entry.type === 'directory') {
+              if (scheduled.has(entry.path)) continue
+              scheduled.add(entry.path)
+              collected.dirs.push({ path: local, ...entryAttributes(entry) })
+              children.push(runTask({ remote: entry.path, local, depth: task.depth + 1 }))
+            } else if (entry.type === 'file') {
+              collected.jobs.push(
+                makeJob({
+                  source: entry.path,
+                  target: local,
+                  size: entry.size,
+                  transferred: 0,
+                  ...entryAttributes(entry)
+                })
+              )
+            }
+          }
+        }
+      } catch (err) {
+        failure = failure ?? (err instanceof Error ? err : new Error(String(err)))
+      } finally {
+        release()
       }
+      if (children.length > 0) await Promise.all(children)
+    }
+
+    try {
+      await Promise.all(tasks.map(runTask))
+    } finally {
+      if (failure) throw failure
     }
   }
 
@@ -764,10 +833,11 @@ export class TransferManager {
     session: SftpSession,
     remoteLinkPath: string,
     localLinkPath: string,
+    depth: number,
     ctx: WalkContext,
     collected: Collected,
-    depth: number
-  ): Promise<void> {
+    scheduled: Set<string>
+  ): Promise<RemoteWalkTask | null> {
     const linkTarget = await session.readlink(remoteLinkPath).catch(() => undefined)
     const resolved = await session.realpath(remoteLinkPath).catch(() => undefined)
 
@@ -783,7 +853,7 @@ export class TransferManager {
               ? localTarget
               : path.relative(path.dirname(localLinkPath), localTarget)
         })
-        return
+        return null
       }
 
       const stats = await session.stat(remoteLinkPath).catch(() => undefined)
@@ -798,27 +868,38 @@ export class TransferManager {
             ...remoteAttributes(stats)
           })
         )
-        return
+        return null
       }
       if (stats && type === 'directory') {
         if (ctx.visited.has(resolved)) {
           if (linkTarget) collected.links.push({ linkPath: localLinkPath, target: linkTarget })
-          return
+          return null
         }
         ctx.visited.add(resolved)
         collected.dirs.push({ path: localLinkPath, ...remoteAttributes(stats) })
-        await this.walkRemote(session, remoteLinkPath, localLinkPath, ctx, collected, depth + 1)
-        return
+        if (!scheduled.has(remoteLinkPath)) {
+          scheduled.add(remoteLinkPath)
+          return { remote: remoteLinkPath, local: localLinkPath, depth: depth + 1 }
+        }
+        return null
       }
     }
     if (linkTarget) collected.links.push({ linkPath: localLinkPath, target: linkTarget })
+    return null
   }
 
   private async run(state: GroupState, session: SftpSession): Promise<void> {
     const group = state.group
-    group.status = state.paused ? 'paused' : 'active'
     this.emit(state)
     try {
+      if (state.collecting) {
+        await this.collectJobs(state, session)
+        state.collecting = false
+        group.collecting = false
+        if (state.cancelled) throw new Error('传输已取消')
+      }
+      group.status = state.paused ? 'paused' : 'active'
+      this.emit(state)
       for (const dir of state.dirs) {
         if (state.cancelled) break
         await this.waitWhilePaused(state)

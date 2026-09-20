@@ -58,6 +58,9 @@ function statusText(group: TransferGroup): string {
   if (group.status === 'error' && group.failedCount) {
     return `失败 ${group.failedCount}`
   }
+  if (group.status === 'pending' && group.collecting) {
+    return '展开目录中'
+  }
   return STATUS_TEXT[group.status]
 }
 
