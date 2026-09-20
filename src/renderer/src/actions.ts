@@ -96,6 +96,14 @@ export async function applyChmod(target: ChmodTarget, mode: number): Promise<voi
   await paneRefresh(target.side)
 }
 
+export async function openInFileBrowser(target: string): Promise<void> {
+  try {
+    await window.api.local.openInBrowser(target)
+  } catch (err) {
+    window.alert(errorMessage(err))
+  }
+}
+
 export async function transferEntries(from: PaneSide, entries: FileEntry[]): Promise<void> {
   if (entries.length === 0) return
   const sessionId = paneRemoteSessionId()
@@ -152,6 +160,12 @@ export function openContextMenu(
   const items: MenuItem[] = []
   if (entry && entry.type === 'directory') {
     items.push({ label: '打开', onClick: () => activateEntry(side, entry) })
+    if (side === 'local') {
+      items.push({
+        label: '在文件浏览器中打开',
+        onClick: () => void openInFileBrowser(entry.path)
+      })
+    }
   }
   if (entry && entry.type !== 'directory') {
     items.push({

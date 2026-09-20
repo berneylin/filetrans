@@ -38,7 +38,8 @@ const api: FileTransApi = {
     mkdir: (parent, name) => invoke(IPC.localMkdir, parent, name),
     rename: (path, newName) => invoke(IPC.localRename, path, newName),
     remove: (paths) => invoke(IPC.localRemove, paths),
-    chmod: (path, mode) => invoke(IPC.localChmod, path, mode)
+    chmod: (path, mode) => invoke(IPC.localChmod, path, mode),
+    openInBrowser: (path) => invoke(IPC.localOpenInBrowser, path)
   },
 
   sftp: {

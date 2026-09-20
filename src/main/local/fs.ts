@@ -144,3 +144,15 @@ export async function chmodEntry(target: string, mode: number): Promise<void> {
     throw friendlyError(err, target)
   }
 }
+
+export async function openInFileBrowser(target: string): Promise<void> {
+  const resolved = path.resolve(target)
+  try {
+    await fs.lstat(resolved)
+  } catch (err) {
+    throw friendlyError(err, resolved)
+  }
+  const { shell } = await import('electron')
+  const failure = await shell.openPath(resolved)
+  if (failure) throw new Error(`无法在文件浏览器中打开: ${failure}`)
+}

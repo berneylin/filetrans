@@ -63,6 +63,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.localChmod, (_event, target: string, mode: number) =>
     localFs.chmodEntry(target, mode)
   )
+  ipcMain.handle(IPC.localOpenInBrowser, (_event, target: string) =>
+    localFs.openInFileBrowser(target)
+  )
 
   ipcMain.handle(IPC.sftpConnect, (_event, params: ConnectParams) => sessions.connect(params))
   ipcMain.handle(IPC.sftpConnectSite, async (_event, siteId: string) => {

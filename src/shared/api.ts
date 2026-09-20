@@ -25,6 +25,7 @@ export interface FileTransApi {
     rename(path: string, newName: string): Promise<string>
     remove(paths: string[]): Promise<void>
     chmod(path: string, mode: number): Promise<void>
+    openInBrowser(path: string): Promise<void>
   }
   sftp: {
     connect(params: ConnectParams): Promise<SessionInfo>

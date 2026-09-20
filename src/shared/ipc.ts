@@ -8,6 +8,7 @@ export const IPC = {
   localRename: 'local:rename',
   localRemove: 'local:remove',
   localChmod: 'local:chmod',
+  localOpenInBrowser: 'local:open-in-browser',
 
   sftpConnect: 'sftp:connect',
   sftpConnectSite: 'sftp:connect-site',
