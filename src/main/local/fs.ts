@@ -1,6 +1,7 @@
 import { promises as fs, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { shell } from 'electron'
 import type { DirListing, EntryType, FileEntry } from '@shared/types'
 import { validateDirectoryPath, escapesParent } from '@shared/path'
 import { assertPermissionMode } from '@shared/format'
@@ -145,6 +146,8 @@ export async function chmodEntry(target: string, mode: number): Promise<void> {
   }
 }
 
+const OPEN_BROWSER_TIMEOUT_MS = 5000
+
 export async function openInFileBrowser(target: string): Promise<void> {
   const resolved = path.resolve(target)
   try {
@@ -152,7 +155,18 @@ export async function openInFileBrowser(target: string): Promise<void> {
   } catch (err) {
     throw friendlyError(err, resolved)
   }
-  const { shell } = await import('electron')
-  const failure = await shell.openPath(resolved)
-  if (failure) throw new Error(`无法在文件浏览器中打开: ${failure}`)
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const outcome = await Promise.race([
+      shell.openPath(resolved),
+      new Promise<'launched'>((resolve) => {
+        timer = setTimeout(() => resolve('launched'), OPEN_BROWSER_TIMEOUT_MS)
+      })
+    ])
+    if (outcome !== 'launched' && outcome) {
+      throw new Error(`无法在文件浏览器中打开: ${outcome}`)
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }

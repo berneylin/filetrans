@@ -4,13 +4,14 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const opened: string[] = []
-const shellResult = vi.hoisted(() => ({ failure: '' }))
+const shellResult = vi.hoisted(() => ({ failure: '', hang: false }))
 
 vi.mock('electron', () => ({
   shell: {
-    openPath: async (target: string): Promise<string> => {
+    openPath: (target: string): Promise<string> => {
       opened.push(target)
-      return shellResult.failure
+      if (shellResult.hang) return new Promise<string>(() => undefined)
+      return Promise.resolve(shellResult.failure)
     }
   }
 }))
@@ -63,4 +64,17 @@ describe('openInFileBrowser', () => {
     await expect(openInFileBrowser(file)).rejects.toThrow('无法在文件浏览器中打开')
     expect(opened).toEqual([file])
   })
+
+  it('openPath 永不返回时不会挂死，按已启动处理', async () => {
+    const { openInFileBrowser } = await import('../src/main/local/fs')
+    const dir = path.join(root, 'hang')
+    mkdirSync(dir)
+    shellResult.hang = true
+    try {
+      await expect(openInFileBrowser(dir)).resolves.toBeUndefined()
+      expect(opened).toEqual([dir])
+    } finally {
+      shellResult.hang = false
+    }
+  }, 15000)
 })
