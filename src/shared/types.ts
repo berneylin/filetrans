@@ -168,6 +168,7 @@ export interface SyncStartRequest {
   direction: SyncDirection
   localPath: string
   remotePath: string
+  bannedDirs?: string[]
   options?: Partial<SyncOptions>
 }
 

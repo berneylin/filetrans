@@ -1,16 +1,25 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
+import { findBannedDir } from '@shared/path'
 import { errorMessage } from '../utils/errors'
 import { btn, btnPrimary, dialogInput } from '../utils/styles'
 import { paneRemoteSessionId, paneSelectedEntries, readPane } from '../pane'
 import { useSettings } from '../stores/settings'
+import { useTabs } from '../stores/tabs'
 import { useUi } from '../stores/ui'
+import { parseBannedDirs, pickSyncPath } from '../utils/sync'
 import { Modal } from './Modal'
+
+function rememberedPath(side: 'local' | 'remote'): string {
+  const state = useSettings.getState()
+  if (side === 'local') return state.syncLastLocal
+  const siteId = useTabs.getState().activeTab()?.siteId
+  return (siteId && state.syncLastRemote[siteId]) || ''
+}
 
 function prefillPane(side: 'local' | 'remote'): string {
   const dirs = paneSelectedEntries(side).filter((entry) => entry.type === 'directory')
-  if (dirs.length === 1) return dirs[0].path
-  return readPane(side).path
+  return pickSyncPath(readPane(side).path, dirs.map((entry) => entry.path), rememberedPath(side))
 }
 
 export function SyncDialog() {
@@ -57,6 +66,20 @@ export function SyncDialog() {
       setError('请先连接远程服务器')
       return
     }
+    const siteId = useTabs.getState().activeTab()?.siteId
+    const bannedDirs = parseBannedDirs(useSettings.getState().syncBannedPaths)
+    if (bannedDirs.length > 0) {
+      const localBanned = findBannedDir(localPath, bannedDirs)
+      if (localBanned) {
+        setError(`本地目录已被禁用同步: ${localBanned}`)
+        return
+      }
+      const remoteBanned = findBannedDir(remotePath, bannedDirs)
+      if (remoteBanned) {
+        setError(`远程目录已被禁用同步: ${remoteBanned}`)
+        return
+      }
+    }
     if (deleteExtraneous) {
       const target = direction === 'upload' ? remotePath : localPath
       const ok = window.confirm(
@@ -77,6 +100,7 @@ export function SyncDialog() {
         direction,
         localPath: localPath.trim(),
         remotePath: remotePath.trim(),
+        bannedDirs,
         options: {
           deleteExtraneous,
           exclude: exclude
@@ -86,6 +110,7 @@ export function SyncDialog() {
           compress: useSettings.getState().syncCompress
         }
       })
+      useSettings.getState().rememberSyncPaths(localPath.trim(), remotePath.trim(), siteId)
       setOpen(false)
     } catch (err) {
       setError(errorMessage(err))

@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
 import { IPC } from '@shared/ipc'
+import { findBannedDir } from '@shared/path'
 import type { SyncJob, SyncStartRequest } from '@shared/types'
 import type { SessionManager } from '../sftp/manager'
 import { type SftpSession } from '../sftp/session'
@@ -112,18 +113,25 @@ export class RsyncManager {
       throw new Error('无效的同步方向')
     }
 
+    remotePath = await session.resolvePath(remotePath)
+    const bannedDirs = req.bannedDirs ?? []
+    if (bannedDirs.length > 0) {
+      const localBanned = findBannedDir(localPath, bannedDirs)
+      if (localBanned) throw new Error(`本地目录已被禁用同步: ${localBanned}`)
+      const remoteBanned = findBannedDir(remotePath, bannedDirs)
+      if (remoteBanned) throw new Error(`远程目录已被禁用同步: ${remoteBanned}`)
+    }
+
     const upload = req.direction === 'upload'
     if (upload) {
       const srcStats = await fs.stat(localPath).catch(() => null)
       if (!srcStats?.isDirectory()) throw new Error(`本地源目录不存在或不是目录: ${localPath}`)
-      remotePath = await session.resolvePath(remotePath)
       const dstStats = await session.stat(remotePath).catch(() => null)
       if (dstStats && !dstStats.isDirectory()) {
         throw new Error(`远程目标不是目录: ${remotePath}`)
       }
       if (!dstStats) await session.mkdirp(remotePath)
     } else {
-      remotePath = await session.resolvePath(remotePath)
       const srcStats = await session.stat(remotePath).catch(() => null)
       if (!srcStats?.isDirectory()) throw new Error(`远程源目录不存在或不是目录: ${remotePath}`)
       const dstStats = await fs.stat(localPath).catch(() => null)

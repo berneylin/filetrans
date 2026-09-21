@@ -6,11 +6,16 @@ interface SettingsStore extends TransferOptions {
   syncExclude: string
   syncDelete: boolean
   syncCompress: boolean
+  syncBannedPaths: string
+  syncLastLocal: string
+  syncLastRemote: Record<string, string>
   update: (patch: Partial<TransferOptions> & Partial<{
     syncExclude: string
     syncDelete: boolean
     syncCompress: boolean
+    syncBannedPaths: string
   }>) => void
+  rememberSyncPaths: (local: string, remote: string, siteId?: string) => void
 }
 
 export const useSettings = create<SettingsStore>()(
@@ -24,7 +29,17 @@ export const useSettings = create<SettingsStore>()(
       syncExclude: '.venv*',
       syncDelete: false,
       syncCompress: true,
-      update: (patch) => set(patch)
+      syncBannedPaths: '',
+      syncLastLocal: '',
+      syncLastRemote: {},
+      update: (patch) => set(patch),
+      rememberSyncPaths: (local, remote, siteId) =>
+        set((state) => ({
+          syncLastLocal: local,
+          syncLastRemote: siteId
+            ? { ...state.syncLastRemote, [siteId]: remote }
+            : state.syncLastRemote
+        }))
     }),
     { name: 'filetrans-transfer-settings' }
   )

@@ -14,6 +14,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
   const [concurrency, setConcurrency] = useState(String(settings.concurrency))
   const [preserveTimestamps, setPreserveTimestamps] = useState(settings.preserveTimestamps)
   const [preservePermissions, setPreservePermissions] = useState(settings.preservePermissions)
+  const [syncBannedPaths, setSyncBannedPaths] = useState(settings.syncBannedPaths)
 
   const save = (): void => {
     useSettings.getState().update({
@@ -21,7 +22,8 @@ export function TransferSettingsDialog({ onClose }: Props) {
       retries: Math.max(0, Math.min(10, Number(retries) || 0)),
       concurrency: Math.max(1, Math.min(16, Number(concurrency) || 1)),
       preserveTimestamps,
-      preservePermissions
+      preservePermissions,
+      syncBannedPaths
     })
     onClose()
   }
@@ -81,6 +83,21 @@ export function TransferSettingsDialog({ onClose }: Props) {
           />
           保留权限
         </label>
+        <div className="mt-4 space-y-2 border-t border-gray-200 pt-3">
+          <div className="text-gray-700">目录同步 (rsync)</div>
+          <label className="block">
+            <span>禁用同步目录</span>
+            <textarea
+              className={`${dialogInput} mt-1 h-20 resize-none font-mono`}
+              value={syncBannedPaths}
+              onChange={(e) => setSyncBannedPaths(e.target.value)}
+              placeholder="每行一个目录，如 /home/sunqy/repos"
+            />
+            <span className="mt-1 block text-gray-500">
+              列表中的目录不能作为同步的本地目录或远程目录，路径结尾的 / 会被忽略。
+            </span>
+          </label>
+        </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <button className={btn} onClick={onClose}>

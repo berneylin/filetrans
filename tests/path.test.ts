@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   escapesParent,
+  findBannedDir,
   posixBasename,
   posixDirname,
   posixJoin,
@@ -95,5 +96,39 @@ describe('escapesParent', () => {
   it('绝对路径不视为穿越（按既定行为单独处理）', () => {
     expect(escapesParent('/home/user', '/mnt/data')).toBe(false)
     expect(escapesParent('/home/user', '/etc')).toBe(false)
+  })
+})
+
+describe('findBannedDir', () => {
+  const banned = ['/home/sunqy/repos', ' /mnt/pfs/code/sunqy/ ', '', '  ']
+
+  it('命中时返回列表中的原始条目', () => {
+    expect(findBannedDir('/home/sunqy/repos', banned)).toBe('/home/sunqy/repos')
+    expect(findBannedDir('/mnt/pfs/code/sunqy', banned)).toBe('/mnt/pfs/code/sunqy/')
+  })
+
+  it('忽略候选路径与列表条目的结尾斜杠', () => {
+    expect(findBannedDir('/home/sunqy/repos/', ['/home/sunqy/repos'])).toBe('/home/sunqy/repos')
+    expect(findBannedDir('/home/sunqy/repos', ['/home/sunqy/repos/'])).toBe('/home/sunqy/repos/')
+    expect(findBannedDir('/home/sunqy/repos///', ['/home/sunqy/repos//'])).toBe('/home/sunqy/repos//')
+    expect(findBannedDir('/', ['/'])).toBe('/')
+    expect(findBannedDir('/', ['//'])).toBe('//')
+  })
+
+  it('规范化 . 与 .. 后比较', () => {
+    expect(findBannedDir('/home/sunqy/repos/./fpolicy/..', banned)).toBe('/home/sunqy/repos')
+    expect(findBannedDir('/home/sunqy/./repos/', banned)).toBe('/home/sunqy/repos')
+  })
+
+  it('未命中返回 null', () => {
+    expect(findBannedDir('/home/sunqy/repos/fpolicy', banned)).toBeNull()
+    expect(findBannedDir('/home/sunqy', banned)).toBeNull()
+    expect(findBannedDir('/home/sunqy/reposx', banned)).toBeNull()
+    expect(findBannedDir('/home/sunqy/repos', [])).toBeNull()
+    expect(findBannedDir('/home/sunqy/repos', ['', '   '])).toBeNull()
+  })
+
+  it('忽略候选路径两端空白', () => {
+    expect(findBannedDir('  /home/sunqy/repos  ', banned)).toBe('/home/sunqy/repos')
   })
 })

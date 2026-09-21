@@ -100,7 +100,7 @@ npm run build        # electron-vite build → out/
 
 ### 同步功能（rsync）
 
-工具栏「同步…」打开对话框，分别填写/预填本地目录与远程目录（预填取自左右面板当前路径或单选目录），选择方向后启动。语义对齐 shell 里的 `rcp`：
+工具栏「同步…」打开对话框，分别填写/预填本地目录与远程目录（预填优先级：面板单选目录 > 上次同步使用的目录 > 面板当前路径），选择方向后启动。语义对齐 shell 里的 `rcp`：
 
 - 参数按两端 rsync 能力协商：本机为 GNU rsync 且远端也是现代 GNU 时用 `-a -s --partial --no-owner --no-group --info=progress2,name [--zc=zstd]`；远端不支持时自动去掉 `-s`/`--info`，改用 `--progress`（并对含特殊字符的远端路径加引号）；本机为 openrsync 时用 `-rlptD --partial --progress`。压缩优先 zstd，降级 `-z`，源目录带尾部斜杠（内容镜像）
 - macOS 自带 openrsync 开箱可用：启动时自动探测本机 rsync（优先 Homebrew/`/usr/local` 的现代 GNU rsync，回退系统自带 `/usr/bin/rsync`），并通过 SSH 探测远端 rsync 版本；openrsync 下进度为文件级（按已完成文件数计算百分比）
@@ -108,6 +108,8 @@ npm run build        # electron-vite build → out/
 - Host Key 复用应用的 TOFU 结果：连接会话时记录的公钥写入临时 known_hosts（`StrictHostKeyChecking=yes`），任务结束即清理
 - `--delete` 默认关闭，开启时二次确认；退出码 24（源文件消失）视为完成并记日志，23 等为失败
 - 取消 = 终止进程组，`--partial` 保留已传部分，下次同步自动续传；app 退出时统一终止运行中的任务
+- 同步成功后记住本次使用的本地目录，远程目录按站点分别记住，重启后仍生效
+- 传输设置中的「禁用同步目录」：每行一个目录，列表中的目录（本地或远程）不能作为同步目录，比较时忽略结尾 `/` 与 `.`/`..`，渲染层与主进程各校验一次
 - 依赖：本机与远程均需安装 rsync（macOS 系统自带 openrsync 即可）；远程缺失时任务失败并展示远端报错
 
 ### 集成测试（真实 SFTP）

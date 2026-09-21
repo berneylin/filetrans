@@ -77,3 +77,13 @@ export function escapesParent(parent: string, name: string): boolean {
   const prefix = parentNormalized.endsWith('/') ? parentNormalized : `${parentNormalized}/`
   return resolved !== parentNormalized && !resolved.startsWith(prefix)
 }
+
+export function findBannedDir(candidate: string, banned: readonly string[]): string | null {
+  const normalized = posixNormalize(candidate.trim())
+  for (const entry of banned) {
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    if (posixNormalize(trimmed) === normalized) return trimmed
+  }
+  return null
+}
