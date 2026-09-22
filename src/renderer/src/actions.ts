@@ -104,6 +104,23 @@ export async function openInFileBrowser(target: string): Promise<void> {
   }
 }
 
+export async function cleanTransientFilesIn(side: PaneSide): Promise<void> {
+  const pane = readPane(side)
+  if (!pane.path) return
+  try {
+    const count =
+      side === 'local'
+        ? await window.api.local.cleanTransientFiles(pane.path)
+        : await window.api.sftp.cleanTransientFiles(requireSession(), pane.path)
+    if (count > 0) await paneRefresh(side)
+    window.alert(
+      count > 0 ? `已清理 ${count} 个传输临时文件` : '当前目录没有传输临时文件'
+    )
+  } catch (err) {
+    window.alert(errorMessage(err))
+  }
+}
+
 export async function transferEntries(from: PaneSide, entries: FileEntry[]): Promise<void> {
   if (entries.length === 0) return
   const sessionId = paneRemoteSessionId()
@@ -154,6 +171,10 @@ export function openContextMenu(
 ): void {
   if (!entry) {
     const blank: MenuItem[] = [{ label: '新建目录', onClick: () => promptMakeDirectory(side) }]
+    blank.push({
+      label: '清理传输临时文件',
+      onClick: () => void cleanTransientFilesIn(side)
+    })
     if (side === 'local') {
       blank.push({
         label: '在文件浏览器中打开',

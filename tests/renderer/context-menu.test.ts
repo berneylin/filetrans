@@ -25,7 +25,7 @@ describe('空白区域右键菜单', () => {
     ;(globalThis as unknown as Record<string, unknown>).window = { api: {} }
   })
 
-  it('本地空白区域：新建目录、在文件浏览器中打开、刷新', async () => {
+  it('本地空白区域：新建目录、清理临时文件、在文件浏览器中打开、刷新', async () => {
     const { openContextMenu } = await import('../../src/renderer/src/actions')
     const { useUi } = await import('../../src/renderer/src/stores/ui')
 
@@ -35,20 +35,26 @@ describe('空白区域右键菜单', () => {
     expect(menu).not.toBeNull()
     expect(labels(menu?.items ?? [])).toEqual([
       '新建目录',
+      '清理传输临时文件',
       '在文件浏览器中打开',
       '---',
       '刷新'
     ])
   })
 
-  it('远程空白区域：只有新建目录与刷新', async () => {
+  it('远程空白区域：新建目录、清理临时文件与刷新', async () => {
     const { openContextMenu } = await import('../../src/renderer/src/actions')
     const { useUi } = await import('../../src/renderer/src/stores/ui')
 
     openContextMenu('remote', null, 10, 20)
 
     const menu = useUi.getState().menu
-    expect(labels(menu?.items ?? [])).toEqual(['新建目录', '---', '刷新'])
+    expect(labels(menu?.items ?? [])).toEqual([
+      '新建目录',
+      '清理传输临时文件',
+      '---',
+      '刷新'
+    ])
   })
 
   it('空白区域的「在文件浏览器中打开」作用于当前目录', async () => {
