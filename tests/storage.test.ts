@@ -182,6 +182,48 @@ describe('站点增删', () => {
     expect(await storage.listSites()).toEqual([])
   })
 
+  it('编辑站点后保持原有顺序', async () => {
+    const storage = await import('../src/main/storage')
+    const first = await storage.saveSite({ ...newSite, name: 'first' })
+    const second = await storage.saveSite({ ...newSite, name: 'second' })
+    await storage.saveSite({ ...newSite, id: first.id, name: 'first-改' })
+    const sites = await storage.listSites()
+    expect(sites.map((s) => s.name)).toEqual(['first-改', 'second'])
+    expect(second.id).toBeTruthy()
+  })
+
+  it('并发保存多个站点全部落盘，互不覆盖', async () => {
+    const storage = await import('../src/main/storage')
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        storage.saveSite({ ...newSite, name: `site-${index}` })
+      )
+    )
+    const sites = await storage.listSites()
+    expect(sites).toHaveLength(8)
+    expect(new Set(sites.map((s) => s.name))).toEqual(
+      new Set(Array.from({ length: 8 }, (_, index) => `site-${index}`))
+    )
+  })
+
+  it('并发读写混合后数据一致', async () => {
+    const storage = await import('../src/main/storage')
+    const first = await storage.saveSite({ ...newSite, name: 'base' })
+    await Promise.all([
+      storage.saveSite({ ...newSite, name: 'a' }),
+      storage.saveSite({ ...newSite, name: 'b' }),
+      storage.saveSite({ ...newSite, id: first.id, name: 'base-改' }),
+      storage.deleteSite(first.id),
+      storage.trustKnownHost('h:22', 'SHA256:xyz')
+    ])
+    const sites = await storage.listSites()
+    const names = sites.map((s) => s.name).sort()
+    expect(names).toEqual(['a', 'b'])
+    expect((await storage.getKnownHost('h:22'))?.fingerprint).toBe('SHA256:xyz')
+    const files = (await import('node:fs')).readdirSync(work)
+    expect(files.filter((file) => file.endsWith('.tmp'))).toEqual([])
+  })
+
   it('写入使用临时文件后原子替换，不残留 tmp', async () => {
     const storage = await import('../src/main/storage')
     await storage.saveSite({ ...newSite })

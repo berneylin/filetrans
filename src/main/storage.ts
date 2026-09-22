@@ -63,7 +63,7 @@ async function readJson<T>(file: string, fallback: T, validate?: (value: unknown
 }
 
 async function writeJson(file: string, data: unknown): Promise<void> {
-  const tmp = `${file}.tmp`
+  const tmp = `${file}.${randomUUID()}.tmp`
   await fs.mkdir(path.dirname(file), { recursive: true })
   const handle = await fs.open(tmp, 'w', 0o600)
   try {
@@ -78,6 +78,28 @@ async function writeJson(file: string, data: unknown): Promise<void> {
     await fs.rm(tmp, { force: true }).catch(() => undefined)
     throw err
   }
+  try {
+    const dir = await fs.open(path.dirname(file), 'r')
+    try {
+      await dir.sync()
+    } finally {
+      await dir.close()
+    }
+  } catch {
+    /* 目录 fsync 在部分平台不可用 */
+  }
+}
+
+const fileLocks = new Map<string, Promise<unknown>>()
+
+function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
+  const previous = fileLocks.get(file) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(task)
+  fileLocks.set(file, next)
+  void next.catch(() => undefined).then(() => {
+    if (fileLocks.get(file) === next) fileLocks.delete(file)
+  })
+  return next
 }
 
 export function encryptionAvailable(): boolean {
@@ -118,44 +140,51 @@ export async function listSites(): Promise<SiteConfig[]> {
   return stored.map(toPublicSite)
 }
 
-export async function saveSite(input: SiteInput): Promise<SiteConfig> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
-    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
-  )
-  const id = input.id ?? randomUUID()
-  const existing = stored.find((s) => s.id === id)
-  let secret = existing?.secret
+export function saveSite(input: SiteInput): Promise<SiteConfig> {
+  return withFileLock(dataFile('sites.json'), async (): Promise<SiteConfig> => {
+    const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+      Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+    )
+    const id = input.id ?? randomUUID()
+    const existing = stored.find((s) => s.id === id)
+    let secret = existing?.secret
 
-  if (!input.rememberSecret) {
-    secret = undefined
-  } else if (input.password !== undefined || input.passphrase !== undefined) {
-    secret = encryptSecret({ password: input.password, passphrase: input.passphrase })
-  }
+    if (!input.rememberSecret) {
+      secret = undefined
+    } else if (input.password !== undefined || input.passphrase !== undefined) {
+      secret = encryptSecret({ password: input.password, passphrase: input.passphrase })
+    }
 
-  const site: StoredSite = {
-    id,
-    name: input.name,
-    host: input.host,
-    port: input.port,
-    username: input.username,
-    authType: input.authType,
-    keyPath: input.keyPath,
-    remotePath: input.remotePath,
-    rememberSecret: input.rememberSecret,
-    secret
-  }
-  await writeJson(dataFile('sites.json'), [...stored.filter((s) => s.id !== id), site])
-  return toPublicSite(site)
+    const site: StoredSite = {
+      id,
+      name: input.name,
+      host: input.host,
+      port: input.port,
+      username: input.username,
+      authType: input.authType,
+      keyPath: input.keyPath,
+      remotePath: input.remotePath,
+      rememberSecret: input.rememberSecret,
+      secret
+    }
+    const next = existing
+      ? stored.map((s) => (s.id === id ? site : s))
+      : [...stored, site]
+    await writeJson(dataFile('sites.json'), next)
+    return toPublicSite(site)
+  })
 }
 
-export async function deleteSite(id: string): Promise<void> {
-  const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
-    Array.isArray(value) && value.every((item) => item && typeof item === 'object')
-  )
-  await writeJson(
-    dataFile('sites.json'),
-    stored.filter((s) => s.id !== id)
-  )
+export function deleteSite(id: string): Promise<void> {
+  return withFileLock(dataFile('sites.json'), async (): Promise<void> => {
+    const stored = await readJson<StoredSite[]>(dataFile('sites.json'), [], (value): value is StoredSite[] =>
+      Array.isArray(value) && value.every((item) => item && typeof item === 'object')
+    )
+    await writeJson(
+      dataFile('sites.json'),
+      stored.filter((s) => s.id !== id)
+    )
+  })
 }
 
 export async function getSiteWithSecret(
@@ -182,13 +211,15 @@ export async function getKnownHost(hostPort: string): Promise<KnownHostRecord | 
   return all[hostPort]
 }
 
-export async function trustKnownHost(hostPort: string, fingerprint: string): Promise<void> {
-  const all = await readJson<Record<string, KnownHostRecord>>(
-    dataFile('known-hosts.json'),
-    {},
-    (value): value is Record<string, KnownHostRecord> =>
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-  )
-  all[hostPort] = { fingerprint, addedAt: Date.now() }
-  await writeJson(dataFile('known-hosts.json'), all)
+export function trustKnownHost(hostPort: string, fingerprint: string): Promise<void> {
+  return withFileLock(dataFile('known-hosts.json'), async (): Promise<void> => {
+    const all = await readJson<Record<string, KnownHostRecord>>(
+      dataFile('known-hosts.json'),
+      {},
+      (value): value is Record<string, KnownHostRecord> =>
+        typeof value === 'object' && value !== null && !Array.isArray(value)
+    )
+    all[hostPort] = { fingerprint, addedAt: Date.now() }
+    await writeJson(dataFile('known-hosts.json'), all)
+  })
 }
