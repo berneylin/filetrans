@@ -24,6 +24,7 @@ export const useSettings = create<SettingsStore>()(
       resume: true,
       retries: 2,
       concurrency: 8,
+      fileConcurrency: 3,
       preserveTimestamps: true,
       preservePermissions: true,
       syncExclude: '.venv*',

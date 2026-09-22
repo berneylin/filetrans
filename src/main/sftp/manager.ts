@@ -12,6 +12,7 @@ interface PendingPrompt {
 export class SessionManager {
   private sessions = new Map<string, SftpSession>()
   private pending = new Map<string, PendingPrompt>()
+  private closeListeners = new Set<(sessionId: string) => void>()
 
   constructor(private getWebContents: () => WebContents | null) {}
 
@@ -21,10 +22,32 @@ export class SessionManager {
     return session
   }
 
+  findByParams(params: ConnectParams): SftpSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (!session.connected) continue
+      if (
+        session.params.host === params.host &&
+        session.params.port === params.port &&
+        session.params.username === params.username
+      ) {
+        return session
+      }
+    }
+    return undefined
+  }
+
+  onSessionClosed(listener: (sessionId: string) => void): () => void {
+    this.closeListeners.add(listener)
+    return () => {
+      this.closeListeners.delete(listener)
+    }
+  }
+
   async connect(params: ConnectParams): Promise<SessionInfo> {
     const session = new SftpSession(params, (info) => this.verifyHostKey(info))
     session.on('close', () => {
       this.sessions.delete(session.id)
+      for (const listener of this.closeListeners) listener(session.id)
       this.getWebContents()?.send(IPC.evtSessionClosed, session.id)
     })
     try {

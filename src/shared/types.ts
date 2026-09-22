@@ -89,6 +89,8 @@ export interface TransferOptions {
   retries: number
   /** 单文件并行分块下载数，1 表示关闭并行 */
   concurrency: number
+  /** 同时传输的文件数 */
+  fileConcurrency: number
   preserveTimestamps: boolean
   preservePermissions: boolean
 }
@@ -133,6 +135,10 @@ export interface TransferGroup {
   activeFiles?: TransferFileProgress[]
   failedFiles?: TransferFailure[]
   failedCount?: number
+  skippedFiles?: TransferFailure[]
+  skippedCount?: number
+  /** 传输完成但有跳过项时的提示，不代表失败 */
+  warning?: string
   collecting?: boolean
   error?: string
   retryCount?: number

@@ -21,7 +21,8 @@ import type { SessionManager } from './manager'
 import type { SftpSession } from './session'
 import { replaceWithRollback } from '../replace'
 
-const MAX_CONCURRENT_FILES = 3
+const MAX_CONCURRENT_FILES = 8
+const DEFAULT_FILE_CONCURRENCY = 3
 const FLUSH_INTERVAL_MS = 300
 const CONFLICT_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_DEPTH = 128
@@ -44,6 +45,7 @@ const DEFAULT_OPTIONS: TransferOptions = {
   resume: true,
   retries: 2,
   concurrency: 8,
+  fileConcurrency: DEFAULT_FILE_CONCURRENCY,
   preserveTimestamps: true,
   preservePermissions: true
 }
@@ -52,6 +54,12 @@ function clampConcurrency(value: unknown): number {
   const parsed = Math.floor(Number(value))
   if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_OPTIONS.concurrency
   return Math.min(parsed, MAX_FILE_CONCURRENCY)
+}
+
+function clampFileConcurrency(value: unknown): number {
+  const parsed = Math.floor(Number(value))
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_FILE_CONCURRENCY
+  return Math.min(parsed, MAX_CONCURRENT_FILES)
 }
 
 interface Job {
@@ -124,6 +132,7 @@ interface GroupState {
   group: TransferGroup
   options: TransferOptions
   request: TransferStartRequest
+  session: SftpSession
   resolution?: ConflictResolution
   jobs: Job[]
   dirs: DirJob[]
@@ -136,6 +145,9 @@ interface GroupState {
   resumeConflicts: boolean
   error?: Error
   failures: JobFailure[]
+  failureCount: number
+  skips: JobFailure[]
+  skipCount: number
   aborts: Set<() => void>
   pauseWaiters: Set<() => void>
   flushTimer: NodeJS.Timeout
@@ -185,6 +197,62 @@ export function planParallelSegments(
 export function isParallelComplete(state: ParallelState, sourceSize: number): boolean {
   const written = state.base + state.segments.reduce((sum, seg) => sum + seg.written, 0)
   return written >= sourceSize
+}
+
+export interface SequentialPartState {
+  sequential: true
+  size: number
+}
+
+export type PartSidecarState = SequentialPartState | ParallelState
+
+function sidecarOf(target: string): string {
+  return `${target}${PART_SUFFIX}.json`
+}
+
+export function validateParallelState(size: number, partSize: number, state: ParallelState): boolean {
+  if (!Number.isFinite(state.base) || state.base < 0 || state.base > size) return false
+  if (!Array.isArray(state.segments)) return false
+  let cursor = state.base
+  let required = state.base
+  for (const segment of state.segments) {
+    if (!segment || segment.start !== cursor) return false
+    if (!(segment.end > segment.start) || segment.end > size) return false
+    if (!Number.isInteger(segment.written) || segment.written < 0) return false
+    if (segment.written > segment.end - segment.start) return false
+    if (segment.written > 0) required = Math.max(required, segment.start + segment.written)
+    cursor = segment.end
+  }
+  if (cursor !== size) return false
+  return partSize >= required && partSize <= size
+}
+
+function isSequentialPartState(value: unknown): value is SequentialPartState {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as SequentialPartState).sequential === true &&
+    Number.isFinite((value as SequentialPartState).size) &&
+    (value as SequentialPartState).size >= 0
+  )
+}
+
+function isParallelState(value: unknown): value is ParallelState {
+  if (typeof value !== 'object' || value === null) return false
+  const state = value as ParallelState
+  return (
+    Number.isFinite(state.base) &&
+    Array.isArray(state.segments) &&
+    state.segments.every(
+      (segment) =>
+        segment !== null &&
+        typeof segment === 'object' &&
+        Number.isFinite(segment.start) &&
+        Number.isFinite(segment.end) &&
+        Number.isInteger(segment.written) &&
+        segment.written >= 0
+    )
+  )
 }
 
 export interface ResumeVerifyRange {
@@ -299,12 +367,11 @@ async function readLocalRange(file: string, start: number, end: number): Promise
 
 async function readRemoteRange(
   state: GroupState,
-  session: SftpSession,
   target: string,
   start: number,
   end: number
 ): Promise<Buffer | null> {
-  const reader = session.createReadStream(target, {
+  const reader = state.session.createReadStream(target, {
     start,
     end,
     highWaterMark: PARALLEL_READ_HWM
@@ -349,6 +416,7 @@ export class TransferManager {
 
     const options: TransferOptions = { ...DEFAULT_OPTIONS, ...req.options }
     options.concurrency = clampConcurrency(options.concurrency)
+    options.fileConcurrency = clampFileConcurrency(options.fileConcurrency)
     const id = randomUUID()
     const label =
       req.sources.length === 1 ? posixBasename(req.sources[0]) : `${req.sources.length} 个项目`
@@ -373,6 +441,7 @@ export class TransferManager {
       group,
       options,
       request: req,
+      session,
       jobs: [],
       dirs: [],
       links: [],
@@ -383,6 +452,9 @@ export class TransferManager {
       paused: false,
       resumeConflicts: false,
       failures: [],
+      failureCount: 0,
+      skips: [],
+      skipCount: 0,
       aborts: new Set(),
       pauseWaiters: new Set(),
       flushTimer: setInterval(() => this.flush(state), FLUSH_INTERVAL_MS),
@@ -391,15 +463,16 @@ export class TransferManager {
     }
     this.groups.set(id, state)
     this.emit(state)
-    void this.run(state, session).catch(() => undefined)
+    void this.run(state).catch(() => undefined)
     return id
   }
 
-  private async collectJobs(state: GroupState, session: SftpSession): Promise<void> {
+  private async collectJobs(state: GroupState): Promise<void> {
+    const session = state.session
     const req = state.request
     const collected =
       req.direction === 'upload'
-        ? await this.collectUploadJobs(req.sources, req.targetDir, req.recursive)
+        ? await this.collectUploadJobs(req.sources, req.targetDir, req.recursive, state)
         : await this.collectDownloadJobs(session, req.sources, req.targetDir, req.recursive, state)
     if (state.cancelled) throw new Error('传输已取消')
     if (collected.jobs.length === 0 && collected.dirs.length === 0 && collected.links.length === 0) {
@@ -410,31 +483,8 @@ export class TransferManager {
     let links = collected.links
 
     const targets = [...jobs.map((job) => job.target), ...links.map((link) => link.linkPath)]
-    const conflicts: ConflictItem[] = []
-    for (const target of targets) {
-      const part = partOf(target)
-      const isUpload = req.direction === 'upload'
-      const exists = isUpload
-        ? (await session.lexists(target)) || (await session.lexists(part))
-        : (await localLexists(target)) || (await localLexists(part))
-      if (!exists) continue
-      const finalStats = isUpload
-        ? await session.lstat(target).catch(() => undefined)
-        : await fs.lstat(target).catch(() => undefined)
-      const partStats =
-        finalStats === undefined
-          ? isUpload
-            ? await session.lstat(part).catch(() => undefined)
-            : await fs.lstat(part).catch(() => undefined)
-          : undefined
-      const info = finalStats ?? partStats
-      const type = info ? typeFromMode(info.mode) : 'file'
-      conflicts.push({
-        targetPath: target,
-        size: info?.size ?? 0,
-        type: type === 'directory' ? 'directory' : type === 'symlink' ? 'symlink' : 'file'
-      })
-    }
+    const conflicts = await this.probeConflicts(state, targets)
+    if (state.cancelled) throw new Error('传输已取消')
 
     if (conflicts.length > 0) {
       const resolution = await this.askConflict(state.group.id, conflicts)
@@ -471,12 +521,50 @@ export class TransferManager {
     state.group.totalBytes = jobs.reduce((sum, job) => sum + job.size, 0)
   }
 
+  private async probeConflicts(state: GroupState, targets: string[]): Promise<ConflictItem[]> {
+    const session = state.session
+    const isUpload = state.group.direction === 'upload'
+    const probed: Array<ConflictItem | undefined> = new Array(targets.length)
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (state.cancelled) return
+        const index = cursor++
+        if (index >= targets.length) return
+        const target = targets[index]
+        const part = partOf(target)
+        const finalStats = isUpload
+          ? await session.lstat(target).catch(() => undefined)
+          : await fs.lstat(target).catch(() => undefined)
+        const partStats =
+          finalStats === undefined
+            ? isUpload
+              ? await session.lstat(part).catch(() => undefined)
+              : await fs.lstat(part).catch(() => undefined)
+            : undefined
+        const info = finalStats ?? partStats
+        if (!info) continue
+        const type = typeFromMode(info.mode)
+        probed[index] = {
+          targetPath: target,
+          size: info.size ?? 0,
+          type: type === 'directory' ? 'directory' : type === 'symlink' ? 'symlink' : 'file'
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(WALK_CONCURRENCY, targets.length) }, () => worker())
+    )
+    return probed.filter((item): item is ConflictItem => item !== undefined)
+  }
+
   cancel(id: string): void {
     const state = this.groups.get(id)
     if (!state) return
     state.cancelled = true
     for (const abort of state.aborts) abort()
     this.releasePauseWaiters(state)
+    this.settleConflict(id, 'cancel')
   }
 
   pause(id: string): void {
@@ -494,6 +582,19 @@ export class TransferManager {
   resume(id: string): void {
     const state = this.groups.get(id)
     if (!state || state.cancelled || !state.paused) return
+    if (state.session && state.session.connected === false) {
+      const params = state.session.params
+      const replacement = params ? this.sessions.findByParams(params) : undefined
+      if (replacement && replacement.connected) {
+        state.session = replacement
+        state.group.sessionId = replacement.id
+        state.group.error = undefined
+      } else {
+        state.group.error = '连接已断开，重新连接站点后可继续传输'
+        this.emit(state)
+        return
+      }
+    }
     state.paused = false
     if (state.group.status === 'paused') state.group.status = 'active'
     this.releasePauseWaiters(state)
@@ -501,10 +602,44 @@ export class TransferManager {
   }
 
   resolveConflict(id: string, resolution: ConflictResolution): void {
+    this.settleConflict(id, resolution)
+  }
+
+  private settleConflict(id: string, resolution: ConflictResolution): void {
     const waiter = this.conflictWaiters.get(id)
     if (!waiter) return
     this.conflictWaiters.delete(id)
+    this.conflictItems.delete(id)
+    this.getWebContents()?.send(IPC.evtConflictExpired, id)
     waiter(resolution)
+  }
+
+  handleSessionClosed(sessionId: string): void {
+    for (const state of this.groups.values()) {
+      if (state.session.id !== sessionId || state.collecting) continue
+      if (
+        state.group.status !== 'active' &&
+        state.group.status !== 'paused' &&
+        state.group.status !== 'pending'
+      ) {
+        continue
+      }
+      state.paused = true
+      if (state.group.status !== 'paused') state.group.status = 'paused'
+      state.group.error = '连接已断开，任务已暂停'
+      for (const abort of state.aborts) abort()
+      for (const job of state.active) job.speed = 0
+      this.emit(state)
+    }
+  }
+
+  clearFinished(): void {
+    for (const [id, state] of this.groups) {
+      const status = state.group.status
+      if (status === 'done' || status === 'error' || status === 'cancelled') {
+        this.groups.delete(id)
+      }
+    }
   }
 
   private releasePauseWaiters(state: GroupState): void {
@@ -521,16 +656,10 @@ export class TransferManager {
 
   private askConflict(transferId: string, items: ConflictItem[]): Promise<ConflictResolution> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.conflictWaiters.delete(transferId)
-        this.conflictItems.delete(transferId)
-        this.getWebContents()?.send(IPC.evtConflictExpired, transferId)
-        resolve('cancel')
-      }, CONFLICT_TIMEOUT_MS)
+      const timer = setTimeout(() => this.settleConflict(transferId, 'cancel'), CONFLICT_TIMEOUT_MS)
       this.conflictItems.set(transferId, items)
       this.conflictWaiters.set(transferId, (resolution) => {
         clearTimeout(timer)
-        this.conflictItems.delete(transferId)
         resolve(resolution)
       })
       this.getWebContents()?.send(IPC.evtConflictPrompt, { transferId, items })
@@ -582,6 +711,7 @@ export class TransferManager {
           if (await session.lexists(part)) await session.removeEntries([part])
         } else {
           await fs.rm(part, { force: true })
+          await fs.rm(sidecarOf(target), { force: true })
         }
       } catch {
         /* 清理残留临时文件失败不阻断 */
@@ -592,7 +722,8 @@ export class TransferManager {
   private async collectUploadJobs(
     sources: string[],
     targetDir: string,
-    recursive: boolean
+    recursive: boolean,
+    state: GroupState
   ): Promise<Collected> {
     const collected: Collected = { jobs: [], dirs: [], links: [] }
     const ctx: WalkContext = { roots: [], visited: new Set() }
@@ -611,7 +742,7 @@ export class TransferManager {
         ctx.roots.push({ sourceRoot: resolved, destRoot: target })
         ctx.visited.add(resolved)
         collected.dirs.push({ path: target, ...localAttributes(stats) })
-        await this.walkLocal(source, target, ctx, collected, 0)
+        await this.walkLocal(source, target, ctx, collected, 0, state)
       } else if (stats.isFile()) {
         collected.jobs.push(
           makeJob({
@@ -623,7 +754,7 @@ export class TransferManager {
           })
         )
       } else {
-        throw new Error(`不支持的文件类型: ${source}`)
+        this.recordSkip(state, source, `不支持的文件类型，已跳过: ${source}`)
       }
     }
     return collected
@@ -634,28 +765,40 @@ export class TransferManager {
     remoteDir: string,
     ctx: WalkContext,
     collected: Collected,
-    depth: number
+    depth: number,
+    state: GroupState
   ): Promise<void> {
-    if (depth > MAX_DEPTH) return
+    if (depth > MAX_DEPTH) {
+      this.recordSkip(state, dir, `目录层级超过 ${MAX_DEPTH} 层，已跳过: ${dir}`)
+      return
+    }
     const dirents = await fs.readdir(dir, { withFileTypes: true })
-    for (const dirent of dirents) {
+    const stats = await Promise.all(
+      dirents.map((dirent) => {
+        if (!dirent.isDirectory() && !dirent.isFile()) return Promise.resolve(null)
+        return fs.lstat(path.join(dir, dirent.name)).catch(() => null)
+      })
+    )
+    for (const [index, dirent] of dirents.entries()) {
       const full = path.join(dir, dirent.name)
       const remote = posixJoin(remoteDir, dirent.name)
       if (dirent.isSymbolicLink()) {
-        await this.handleLocalSymlink(full, remote, ctx, collected, depth)
+        await this.handleLocalSymlink(full, remote, ctx, collected, depth, state)
       } else if (dirent.isDirectory()) {
-        const stats = await fs.lstat(full)
-        collected.dirs.push({ path: remote, ...localAttributes(stats) })
-        await this.walkLocal(full, remote, ctx, collected, depth + 1)
+        const entryStats = stats[index]
+        if (!entryStats) continue
+        collected.dirs.push({ path: remote, ...localAttributes(entryStats) })
+        await this.walkLocal(full, remote, ctx, collected, depth + 1, state)
       } else if (dirent.isFile()) {
-        const stats = await fs.lstat(full)
+        const entryStats = stats[index]
+        if (!entryStats) continue
         collected.jobs.push(
           makeJob({
             source: full,
             target: remote,
-            size: stats.size,
+            size: entryStats.size,
             transferred: 0,
-            ...localAttributes(stats)
+            ...localAttributes(entryStats)
           })
         )
       }
@@ -667,7 +810,8 @@ export class TransferManager {
     remoteLinkPath: string,
     ctx: WalkContext,
     collected: Collected,
-    depth: number
+    depth: number,
+    state: GroupState
   ): Promise<void> {
     let linkTarget: string | undefined
     try {
@@ -712,7 +856,7 @@ export class TransferManager {
         }
         ctx.visited.add(resolved)
         collected.dirs.push({ path: remoteLinkPath, ...localAttributes(stats) })
-        await this.walkLocal(linkPath, remoteLinkPath, ctx, collected, depth + 1)
+        await this.walkLocal(linkPath, remoteLinkPath, ctx, collected, depth + 1, state)
         return
       }
     }
@@ -792,31 +936,39 @@ export class TransferManager {
       let children: Array<Promise<void>> = []
       await acquire()
       try {
-        if (!failure && !state.cancelled && task.depth <= MAX_DEPTH) {
-          const listing = await session.list(task.remote)
-          for (const entry of listing.entries) {
-            const local = path.join(task.local, entry.name)
-            if (entry.isSymlink) {
-              const next = await this.handleRemoteSymlink(
-                session, entry.path, local, task.depth, ctx, collected, scheduled
-              )
-              if (next) children.push(runTask(next))
-            } else if (entry.type === 'directory') {
-              if (scheduled.has(entry.path)) continue
-              scheduled.add(entry.path)
-              collected.dirs.push({ path: local, ...entryAttributes(entry) })
-              children.push(runTask({ remote: entry.path, local, depth: task.depth + 1 }))
-            } else if (entry.type === 'file') {
-              collected.jobs.push(
-                makeJob({
-                  source: entry.path,
-                  target: local,
-                  size: entry.size,
-                  transferred: 0,
-                  ...entryAttributes(entry)
-                })
-              )
+        if (!failure && !state.cancelled) {
+          if (task.depth <= MAX_DEPTH) {
+            const listing = await session.list(task.remote)
+            for (const entry of listing.entries) {
+              const local = path.join(task.local, entry.name)
+              if (entry.isSymlink) {
+                const next = await this.handleRemoteSymlink(
+                  session, entry.path, local, task.depth, ctx, collected, scheduled
+                )
+                if (next) children.push(runTask(next))
+              } else if (entry.type === 'directory') {
+                if (scheduled.has(entry.path)) continue
+                scheduled.add(entry.path)
+                collected.dirs.push({ path: local, ...entryAttributes(entry) })
+                children.push(runTask({ remote: entry.path, local, depth: task.depth + 1 }))
+              } else if (entry.type === 'file') {
+                collected.jobs.push(
+                  makeJob({
+                    source: entry.path,
+                    target: local,
+                    size: entry.size,
+                    transferred: 0,
+                    ...entryAttributes(entry)
+                  })
+                )
+              }
             }
+          } else {
+            this.recordSkip(
+              state,
+              task.remote,
+              `目录层级超过 ${MAX_DEPTH} 层，已跳过: ${task.remote}`
+            )
           }
         }
       } catch (err) {
@@ -894,12 +1046,12 @@ export class TransferManager {
     return null
   }
 
-  private async run(state: GroupState, session: SftpSession): Promise<void> {
+  private async run(state: GroupState): Promise<void> {
     const group = state.group
     this.emit(state)
     try {
       if (state.collecting) {
-        await this.collectJobs(state, session)
+        await this.collectJobs(state)
         state.collecting = false
         group.collecting = false
         if (state.cancelled) throw new Error('传输已取消')
@@ -910,7 +1062,7 @@ export class TransferManager {
         if (state.cancelled) break
         await this.waitWhilePaused(state)
         if (state.cancelled) break
-        if (group.direction === 'upload') await session.mkdirp(dir.path)
+        if (group.direction === 'upload') await state.session.mkdirp(dir.path)
         else await fs.mkdir(dir.path, { recursive: true })
       }
       for (const link of state.links) {
@@ -918,7 +1070,7 @@ export class TransferManager {
         await this.waitWhilePaused(state)
         if (state.cancelled) break
         try {
-          await this.createSymlink(session, state, link)
+          await this.createSymlink(state, link)
           group.doneFiles++
         } catch (err) {
           if (state.cancelled) break
@@ -930,9 +1082,12 @@ export class TransferManager {
         }
         this.emit(state)
       }
-      const workerCount = Math.min(MAX_CONCURRENT_FILES, Math.max(1, state.jobs.length))
-      await Promise.all(Array.from({ length: workerCount }, () => this.worker(state, session)))
-      if (!state.cancelled) await this.applyDirAttributes(state, session)
+      const workerCount = Math.min(
+        state.options.fileConcurrency,
+        Math.max(1, state.jobs.length)
+      )
+      await Promise.all(Array.from({ length: workerCount }, () => this.worker(state)))
+      if (!state.cancelled) await this.applyDirAttributes(state)
     } catch (err) {
       if (!state.cancelled) state.error = err instanceof Error ? err : new Error(String(err))
     }
@@ -942,27 +1097,34 @@ export class TransferManager {
     } else if (state.error) {
       group.status = 'error'
       group.error = state.error.message
-    } else if (state.failures.length > 0) {
+    } else if (state.failureCount > 0) {
       group.status = 'error'
       group.error =
-        state.failures.length === 1
+        state.failureCount === 1
           ? `1 个文件失败：${state.failures[0].error}`
-          : `${state.failures.length} 个文件失败，首个失败原因：${state.failures[0].error}`
+          : `${state.failureCount} 个文件失败，首个失败原因：${state.failures[0].error}`
     } else {
       group.status = 'done'
       group.doneFiles = group.totalFiles
       group.transferredBytes = group.totalBytes
     }
+    if (state.skipCount > 0) {
+      group.warning =
+        state.skipCount === 1
+          ? `已跳过 1 个项目：${state.skips[0].error}`
+          : `已跳过 ${state.skipCount} 个项目，首个原因：${state.skips[0].error}`
+    }
     group.speed = 0
     group.finishedAt = Date.now()
+    state.jobs = []
+    state.dirs = []
+    state.links = []
+    this.pruneFinished()
     this.emit(state)
   }
 
-  private async createSymlink(
-    session: SftpSession,
-    state: GroupState,
-    link: LinkJob
-  ): Promise<void> {
+  private async createSymlink(state: GroupState, link: LinkJob): Promise<void> {
+    const session = state.session
     const upload = state.group.direction === 'upload'
     const partTarget = partOf(link.linkPath)
     if (upload) {
@@ -973,10 +1135,10 @@ export class TransferManager {
       await fs.symlink(link.target, partTarget)
     }
     if (state.cancelled) return
-    await this.finalizeTarget(session, upload, partTarget, link.linkPath)
+    await this.finalizeTarget(state, upload, partTarget, link.linkPath)
   }
 
-  private async worker(state: GroupState, session: SftpSession): Promise<void> {
+  private async worker(state: GroupState): Promise<void> {
     for (;;) {
       if (state.cancelled) return
       await this.waitWhilePaused(state)
@@ -986,7 +1148,7 @@ export class TransferManager {
       state.active.add(job)
       this.emit(state)
       try {
-        await this.runJobWithRetry(state, session, job)
+        await this.runJobWithRetry(state, job)
         state.group.doneFiles++
         state.group.retryCount = 0
       } catch (err) {
@@ -1005,9 +1167,13 @@ export class TransferManager {
     entry: { id: number; source: string },
     message: string
   ): void {
-    state.failures.push({ id: entry.id, source: entry.source, error: message })
-    state.group.failedCount = state.failures.length
-    state.group.failedFiles = state.failures.slice(0, MAX_REPORTED_FAILURES).map((failure) => ({
+    state.failureCount += 1
+    const id = entry.id >= 0 ? entry.id : -state.failureCount
+    if (state.failures.length < MAX_REPORTED_FAILURES) {
+      state.failures.push({ id, source: entry.source, error: message })
+    }
+    state.group.failedCount = state.failureCount
+    state.group.failedFiles = state.failures.map((failure) => ({
       id: failure.id,
       name: posixBasename(failure.source),
       path: failure.source,
@@ -1015,14 +1181,28 @@ export class TransferManager {
     }))
   }
 
-  private async runJobWithRetry(state: GroupState, session: SftpSession, job: Job): Promise<void> {
+  private recordSkip(state: GroupState, source: string, reason: string): void {
+    state.skipCount += 1
+    if (state.skips.length < MAX_REPORTED_FAILURES) {
+      state.skips.push({ id: -state.skipCount, source, error: reason })
+    }
+    state.group.skippedCount = state.skipCount
+    state.group.skippedFiles = state.skips.map((skip) => ({
+      id: skip.id,
+      name: posixBasename(skip.source),
+      path: skip.source,
+      error: skip.error
+    }))
+  }
+
+  private async runJobWithRetry(state: GroupState, job: Job): Promise<void> {
     let failures = 0
     for (;;) {
       if (state.cancelled) throw new Error('传输已取消')
       await this.waitWhilePaused(state)
       if (state.cancelled) throw new Error('传输已取消')
       try {
-        await this.runJob(state, session, job)
+        await this.runJob(state, job)
         return
       } catch (err) {
         if (state.cancelled) throw err
@@ -1040,7 +1220,7 @@ export class TransferManager {
     }
   }
 
-  private async syncSourceStats(state: GroupState, session: SftpSession, job: Job): Promise<void> {
+  private async syncSourceStats(state: GroupState, job: Job): Promise<void> {
     const upload = state.group.direction === 'upload'
     let size: number
     let mtime: number
@@ -1052,7 +1232,7 @@ export class TransferManager {
         attrs = localAttributes(stats)
         mtime = Math.floor(stats.mtimeMs / 1000)
       } else {
-        const stats = await session.stat(job.source)
+        const stats = await state.session.stat(job.source)
         size = stats.size
         attrs = remoteAttributes(stats)
         mtime = Math.floor(stats.mtime)
@@ -1073,20 +1253,18 @@ export class TransferManager {
 
   private async verifyResumePrefix(
     state: GroupState,
-    session: SftpSession,
     job: Job,
-    upload: boolean,
     destPath: string,
     offset: number
   ): Promise<boolean> {
     for (const range of planResumeVerify(offset)) {
       if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
       try {
-        const source = upload
+        const source = state.group.direction === 'upload'
           ? await readLocalRange(job.source, range.start, range.end)
-          : await readRemoteRange(state, session, job.source, range.start, range.end)
-        const dest = upload
-          ? await readRemoteRange(state, session, destPath, range.start, range.end)
+          : await readRemoteRange(state, job.source, range.start, range.end)
+        const dest = state.group.direction === 'upload'
+          ? await readRemoteRange(state, destPath, range.start, range.end)
           : await readLocalRange(destPath, range.start, range.end)
         const length = range.end - range.start + 1
         if (!source || !dest || source.length !== length || !source.equals(dest)) {
@@ -1100,11 +1278,8 @@ export class TransferManager {
     return true
   }
 
-  private async moveToPart(
-    session: SftpSession,
-    upload: boolean,
-    target: string
-  ): Promise<boolean> {
+  private async moveToPart(state: GroupState, upload: boolean, target: string): Promise<boolean> {
+    const session = state.session
     try {
       const stats = upload ? await session.lstat(target) : await fs.lstat(target)
       const isSymlink = upload
@@ -1132,6 +1307,7 @@ export class TransferManager {
         if (await session.lexists(part)) await session.removeEntries([part])
       } else {
         await fs.rm(part, { force: true })
+        await fs.rm(sidecarOf(target), { force: true })
       }
     } catch {
       /* 清理失败不阻断 */
@@ -1140,7 +1316,6 @@ export class TransferManager {
 
   private async completeJob(
     state: GroupState,
-    session: SftpSession,
     job: Job,
     partTarget: string
   ): Promise<void> {
@@ -1149,18 +1324,19 @@ export class TransferManager {
     const delta = job.size - job.transferred
     if (delta > 0) state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
     job.transferred = job.size
-    await this.applyFileAttributes(state, session, job, upload, partTarget)
+    await this.applyFileAttributes(state, job, upload, partTarget)
     if (state.cancelled || state.paused) throw markAborted(new Error('传输已中断'))
-    await this.finalizeTarget(session, upload, partTarget, job.target)
+    await this.finalizeTarget(state, upload, partTarget, job.target)
+    if (!upload) await this.removePartSidecar(job.target)
   }
 
   private async finalizeTarget(
-    session: SftpSession,
+    state: GroupState,
     upload: boolean,
     source: string,
     target: string
   ): Promise<void> {
-    if (upload) await session.finalizeTransfer(source, target)
+    if (upload) await state.session.finalizeTransfer(source, target)
     else {
       await replaceWithRollback(source, target, {
         rename: (from, to) => fs.rename(from, to),
@@ -1170,11 +1346,62 @@ export class TransferManager {
     }
   }
 
-  private async runJob(state: GroupState, session: SftpSession, job: Job): Promise<void> {
+  private async removePartSidecar(target: string): Promise<void> {
+    try {
+      await fs.rm(sidecarOf(target), { force: true })
+    } catch {
+      /* 清理失败不阻断 */
+    }
+  }
+
+  private async readPartSidecar(target: string): Promise<PartSidecarState | undefined> {
+    try {
+      const raw = await fs.readFile(sidecarOf(target), 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (isSequentialPartState(parsed)) return parsed
+      return isParallelState(parsed) ? parsed : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async writeSequentialSidecar(job: Job): Promise<void> {
+    try {
+      await fs.writeFile(
+        sidecarOf(job.target),
+        JSON.stringify({ sequential: true, size: job.size } satisfies SequentialPartState),
+        'utf8'
+      )
+    } catch {
+      /* 写入失败只影响后续跨会话续传 */
+    }
+  }
+
+  private async persistParallelSidecar(job: Job, partTarget: string): Promise<void> {
+    if (!job.parallel) return
+    try {
+      const handle = await fs.open(partTarget, 'r+')
+      try {
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+    } catch {
+      /* 无法 fsync 时旁挂状态可能领先于磁盘，续传前的校验会兜住 */
+    }
+    try {
+      await fs.writeFile(sidecarOf(job.target), JSON.stringify(job.parallel), 'utf8')
+    } catch {
+      /* 写入失败只影响后续跨会话续传 */
+    }
+  }
+
+  private async runJob(state: GroupState, job: Job): Promise<void> {
+    const session = state.session
     const upload = state.group.direction === 'upload'
     const partTarget = partOf(job.target)
 
-    await this.syncSourceStats(state, session, job)
+    await this.syncSourceStats(state, job)
 
     const targetStats = upload
       ? await session.lstat(job.target).catch(() => undefined)
@@ -1189,26 +1416,44 @@ export class TransferManager {
     let offset = 0
     if (useResume) {
       const partSize = upload ? await this.remoteSize(session, partTarget) : await localSize(partTarget)
-      if (!upload && job.parallel && partSize !== null) {
-        const requiredSize = Math.max(
-          job.parallel.base,
-          ...job.parallel.segments.map((segment) => segment.written > 0 ? segment.start + segment.written : 0)
-        )
-        if (partSize >= requiredSize && partSize <= job.size) {
-          offset = job.parallel.base
+      if (!upload && partSize !== null) {
+        const restored = job.parallel ?? (await this.readPartSidecar(job.target))
+        if (restored === undefined) {
+          useResume = false
+        } else if ('sequential' in restored) {
+          job.parallel = undefined
+          if (restored.size !== job.size) {
+            useResume = false
+          } else {
+            const plan = resolveResumeOffset(job.size, partSize)
+            const match =
+              partSize <= job.size && (await this.verifyResumePrefix(state, job, partTarget, plan.offset))
+            if (match) {
+              offset = plan.offset
+              if (plan.complete) {
+                await this.completeJob(state, job, partTarget)
+                return
+              }
+            } else {
+              useResume = false
+            }
+          }
+        } else if (validateParallelState(job.size, partSize, restored)) {
+          job.parallel = restored
+          offset = restored.base
         } else {
           useResume = false
         }
       } else if (partSize !== null) {
         job.parallel = undefined
         const plan = resolveResumeOffset(job.size, partSize)
-        const match = partSize <= job.size && await this.verifyResumePrefix(
-          state, session, job, upload, partTarget, plan.offset
-        )
+        const match = partSize <= job.size && (await this.verifyResumePrefix(
+          state, job, partTarget, plan.offset
+        ))
         if (match) {
           offset = plan.offset
           if (plan.complete) {
-            await this.completeJob(state, session, job, partTarget)
+            await this.completeJob(state, job, partTarget)
             return
           }
         } else {
@@ -1224,16 +1469,17 @@ export class TransferManager {
         } else {
           const plan = resolveResumeOffset(job.size, legacySize)
           const match = await this.verifyResumePrefix(
-            state, session, job, upload, job.target, plan.offset
+            state, job, job.target, plan.offset
           )
           if (match && plan.complete) {
             const delta = job.size - job.transferred
             if (delta > 0) state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
             job.transferred = job.size
-            await this.applyFileAttributes(state, session, job, upload, job.target)
+            await this.applyFileAttributes(state, job, upload, job.target)
+            if (!upload) await this.removePartSidecar(job.target)
             return
           }
-          if (match && await this.moveToPart(session, upload, job.target)) {
+          if (match && (await this.moveToPart(state, upload, job.target))) {
             offset = plan.offset
           } else {
             useResume = false
@@ -1253,8 +1499,9 @@ export class TransferManager {
       !upload &&
       (job.parallel || (state.options.concurrency > 1 && remaining >= PARALLEL_MIN_BYTES))
     ) {
-      await this.downloadParallel(state, session, job, partTarget, offset)
+      await this.downloadParallel(state, job, partTarget, offset)
     } else {
+      if (!upload) await this.writeSequentialSidecar(job)
       const delta = offset - job.transferred
       job.transferred = offset
       state.group.transferredBytes = Math.max(0, state.group.transferredBytes + delta)
@@ -1270,7 +1517,7 @@ export class TransferManager {
     if (finalSize !== job.size) {
       throw new Error(`文件大小校验失败 (${finalSize ?? '?'} / ${job.size} 字节)`)
     }
-    await this.completeJob(state, session, job, partTarget)
+    await this.completeJob(state, job, partTarget)
   }
 
   private async downloadOrUploadStream(
@@ -1312,17 +1559,18 @@ export class TransferManager {
 
   private async downloadParallel(
     state: GroupState,
-    session: SftpSession,
     job: Job,
     partTarget: string,
     offset: number
   ): Promise<void> {
     if (!job.parallel) {
-      if (offset === 0) await fs.writeFile(partTarget, Buffer.alloc(0))
-      job.parallel = {
+      const parallel: ParallelState = {
         base: offset,
         segments: planParallelSegments(job.size, offset, state.options.concurrency)
       }
+      await fs.writeFile(sidecarOf(job.target), JSON.stringify(parallel), 'utf8')
+      if (offset === 0) await fs.writeFile(partTarget, Buffer.alloc(0))
+      job.parallel = parallel
     }
     const { base, segments } = job.parallel
 
@@ -1359,7 +1607,7 @@ export class TransferManager {
         const length = segment.end - segment.start
         if (segment.written >= length) continue
         const from = segment.start + segment.written
-        const reader = session.createReadStream(job.source, {
+        const reader = state.session.createReadStream(job.source, {
           start: from,
           end: segment.end - 1,
           highWaterMark: PARALLEL_READ_HWM
@@ -1377,9 +1625,11 @@ export class TransferManager {
             throw new Error('分段大小校验失败')
           }
           segment.written = length
+          await this.persistParallelSidecar(job, partTarget)
         } catch (err) {
           const persisted = Math.max(0, Math.min(length - segment.written, writer.bytesWritten))
           segment.written += persisted
+          await this.persistParallelSidecar(job, partTarget)
           if (aborted || state.cancelled || state.paused) return
           failure = failure ?? (err instanceof Error ? err : new Error(String(err)))
           abortAll()
@@ -1414,7 +1664,6 @@ export class TransferManager {
 
   private async applyFileAttributes(
     state: GroupState,
-    session: SftpSession,
     job: Job,
     upload: boolean,
     targetPath: string
@@ -1423,13 +1672,13 @@ export class TransferManager {
     if (!preservePermissions && !preserveTimestamps) return
     try {
       if (preservePermissions && job.mode) {
-        if (upload) await session.chmodEntry(targetPath, job.mode & PERMISSION_MASK)
+        if (upload) await state.session.chmodEntry(targetPath, job.mode & PERMISSION_MASK)
         else await fs.chmod(targetPath, job.mode & PERMISSION_MASK)
       }
       if (preserveTimestamps && job.mtime) {
         const atime = Math.floor(job.atime ?? job.mtime)
         const mtime = Math.floor(job.mtime)
-        if (upload) await session.utimes(targetPath, atime, mtime)
+        if (upload) await state.session.utimes(targetPath, atime, mtime)
         else await fs.utimes(targetPath, atime, mtime)
       }
     } catch {
@@ -1437,7 +1686,7 @@ export class TransferManager {
     }
   }
 
-  private async applyDirAttributes(state: GroupState, session: SftpSession): Promise<void> {
+  private async applyDirAttributes(state: GroupState): Promise<void> {
     const { preservePermissions, preserveTimestamps } = state.options
     if (!preservePermissions && !preserveTimestamps) return
     const upload = state.group.direction === 'upload'
@@ -1445,13 +1694,13 @@ export class TransferManager {
     for (const dir of dirs) {
       try {
         if (preservePermissions && dir.mode) {
-          if (upload) await session.chmodEntry(dir.path, dir.mode & PERMISSION_MASK)
+          if (upload) await state.session.chmodEntry(dir.path, dir.mode & PERMISSION_MASK)
           else await fs.chmod(dir.path, dir.mode & PERMISSION_MASK)
         }
         if (preserveTimestamps && dir.mtime) {
           const atime = Math.floor(dir.atime ?? dir.mtime)
           const mtime = Math.floor(dir.mtime)
-          if (upload) await session.utimes(dir.path, atime, mtime)
+          if (upload) await state.session.utimes(dir.path, atime, mtime)
           else await fs.utimes(dir.path, atime, mtime)
         }
       } catch {

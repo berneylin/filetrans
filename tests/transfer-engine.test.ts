@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { promises as fs } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
@@ -672,6 +673,136 @@ describe('传输引擎', () => {
     expect((await fs.readFile(local)).equals(data)).toBe(true)
   })
 
+  it('重启后按旁挂状态恢复并行分段，只补未完成区间', async () => {
+    const size = PARALLEL_MIN_BYTES + 4 * PARALLEL_MIN_SEGMENT
+    const data = randomBytes(size)
+    const remote = '/remote/src/cross.bin'
+    const local = path.join(tempDir, 'cross.bin')
+    const segments = planParallelSegments(size, 0, 4)
+    expect(segments.length).toBe(4)
+    const seg1Written = Math.floor((segments[1].end - segments[1].start) / 2)
+
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(remote, data)
+    const handle = await fs.open(`${local}.filetrans-part`, 'w')
+    await handle.write(data.subarray(0, segments[0].end), 0, segments[0].end, 0)
+    await handle.write(
+      data.subarray(segments[1].start, segments[1].start + seg1Written),
+      0, seg1Written, segments[1].start
+    )
+    await handle.write(data.subarray(size - 1), 0, 1, size - 1)
+    await handle.close()
+    await fs.writeFile(
+      `${local}.filetrans-part.json`,
+      JSON.stringify({
+        base: 0,
+        segments: segments.map((segment, index) => ({
+          ...segment,
+          written: index === 0 ? segment.end - segment.start : index === 1 ? seg1Written : 0
+        }))
+      })
+    )
+
+    const id = await manager.start({
+      sessionId: 'test-session', direction: 'download', sources: [remote],
+      targetDir: tempDir, recursive: true,
+      options: { resume: true, retries: 0, concurrency: 4, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done', 30000)
+    expect((await fs.readFile(local)).equals(data)).toBe(true)
+    expect(fsSyncExists(`${local}.filetrans-part.json`)).toBe(false)
+    const reads = fake.readLog.filter((entry) => entry.path === remote)
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.every((entry) => entry.start !== 0)).toBe(true)
+    expect(reads.some((entry) => entry.start === segments[1].start + seg1Written)).toBe(true)
+    expect(reads.some((entry) => entry.start === segments[2].start)).toBe(true)
+  }, 30000)
+
+  it('旁挂状态损坏时丢弃稀疏临时文件并重新下载完整内容', async () => {
+    const size = PARALLEL_MIN_BYTES + PARALLEL_MIN_SEGMENT
+    const data = randomBytes(size)
+    const remote = '/remote/src/broken.bin'
+    const local = path.join(tempDir, 'broken.bin')
+    const { fake, events, manager } = makeHarness('resume')
+    fake.files.set(remote, data)
+    const handle = await fs.open(`${local}.filetrans-part`, 'w')
+    await handle.write(data.subarray(size - 1), 0, 1, size - 1)
+    await handle.close()
+    await fs.writeFile(`${local}.filetrans-part.json`, '{broken json')
+
+    const id = await manager.start({
+      sessionId: 'test-session', direction: 'download', sources: [remote],
+      targetDir: tempDir, recursive: true,
+      options: { resume: true, retries: 0, concurrency: 2, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect((await fs.readFile(local)).equals(data)).toBe(true)
+    expect(fsSyncExists(`${local}.filetrans-part.json`)).toBe(false)
+    const reads = fake.readLog.filter((entry) => entry.path === remote)
+    expect(reads.some((entry) => entry.start === 0)).toBe(true)
+  })
+
+  it('冲突等待期间取消立即终止传输组', async () => {
+    const data = randomBytes(16 * 1024)
+    const source = path.join(tempDir, 'file.bin')
+    await fs.writeFile(source, data)
+    let conflictSeen = false
+    const { fake, events, manager } = makeHarness('resume', () => {
+      conflictSeen = true
+      return new Promise<void>(() => undefined)
+    })
+    fake.files.set(target, data)
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => conflictSeen)
+    manager.cancel(id)
+    await waitFor(() => latest(events, id)?.status === 'cancelled')
+  })
+
+  it('不支持的文件类型只记为跳过，其余文件照常传完且不算失败', async () => {
+    const data = randomBytes(4 * 1024)
+    const normal = path.join(tempDir, 'normal.bin')
+    const socketPath = path.join(tempDir, 'ipc.sock')
+    await fs.writeFile(normal, data)
+    const server = net.createServer()
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve))
+
+    try {
+      const { fake, events, manager } = makeHarness()
+      const id = await manager.start({
+        sessionId: 'test-session',
+        direction: 'upload',
+        sources: [normal, socketPath],
+        targetDir: '/remote/dest',
+        recursive: true,
+        options: { resume: true, retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => {
+        const status = latest(events, id)?.status
+        return status === 'done' || status === 'error'
+      })
+
+      const final = latest(events, id)
+      expect(final?.status).toBe('done')
+      expect(final?.failedCount ?? 0).toBe(0)
+      expect(final?.skippedCount).toBe(1)
+      expect(final?.skippedFiles?.[0].path).toBe(socketPath)
+      expect(final?.warning).toContain('已跳过 1 个项目')
+      expect(final?.error).toBeUndefined()
+      expect(fake.files.get('/remote/dest/normal.bin')?.equals(data)).toBe(true)
+      expect(fake.files.has('/remote/dest/ipc.sock')).toBe(false)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   it.each(['upload', 'download'] as const)('%s 已有临时内容校验通过后只补传剩余部分', async (direction) => {
     const data = Buffer.alloc(1024 * 1024, 7)
     const prefixSize = 512 * 1024
@@ -683,6 +814,10 @@ describe('传输引擎', () => {
     } else {
       fake.files.set(target, data)
       await fs.writeFile(`${local}.filetrans-part`, data.subarray(0, prefixSize))
+      await fs.writeFile(
+        `${local}.filetrans-part.json`,
+        JSON.stringify({ sequential: true, size: data.length })
+      )
     }
     const id = await manager.start({
       sessionId: 'test-session', direction,
