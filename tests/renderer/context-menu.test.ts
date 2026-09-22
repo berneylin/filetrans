@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MenuItem } from '../src/renderer/src/types'
+import type { MenuItem } from '../../src/renderer/src/types'
 
 function makeStorage(): {
   getItem: (key: string) => string | null
@@ -26,8 +26,8 @@ describe('空白区域右键菜单', () => {
   })
 
   it('本地空白区域：新建目录、在文件浏览器中打开、刷新', async () => {
-    const { openContextMenu } = await import('../src/renderer/src/actions')
-    const { useUi } = await import('../src/renderer/src/stores/ui')
+    const { openContextMenu } = await import('../../src/renderer/src/actions')
+    const { useUi } = await import('../../src/renderer/src/stores/ui')
 
     openContextMenu('local', null, 10, 20)
 
@@ -42,8 +42,8 @@ describe('空白区域右键菜单', () => {
   })
 
   it('远程空白区域：只有新建目录与刷新', async () => {
-    const { openContextMenu } = await import('../src/renderer/src/actions')
-    const { useUi } = await import('../src/renderer/src/stores/ui')
+    const { openContextMenu } = await import('../../src/renderer/src/actions')
+    const { useUi } = await import('../../src/renderer/src/stores/ui')
 
     openContextMenu('remote', null, 10, 20)
 
@@ -52,9 +52,9 @@ describe('空白区域右键菜单', () => {
   })
 
   it('空白区域的「在文件浏览器中打开」作用于当前目录', async () => {
-    const { openContextMenu } = await import('../src/renderer/src/actions')
-    const { useUi } = await import('../src/renderer/src/stores/ui')
-    const { useFiles } = await import('../src/renderer/src/stores/files')
+    const { openContextMenu } = await import('../../src/renderer/src/actions')
+    const { useUi } = await import('../../src/renderer/src/stores/ui')
+    const { useFiles } = await import('../../src/renderer/src/stores/files')
     useFiles.setState((state) => ({ local: { ...state.local, path: '/home/sunqy' } }))
 
     const opened: string[] = []

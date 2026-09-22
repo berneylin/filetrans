@@ -60,8 +60,8 @@ describe('标签页打开站点时使用默认路径', () => {
   it('跳转到默认远程路径', async () => {
     const api = makeApi(makeSite({ remotePath: '/data/www' }))
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -79,8 +79,8 @@ describe('标签页打开站点时使用默认路径', () => {
       return { path: target, parent: '/', entries: [] }
     })
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -91,8 +91,8 @@ describe('标签页打开站点时使用默认路径', () => {
   it('未设置默认路径时进入主目录', async () => {
     const api = makeApi()
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -103,8 +103,8 @@ describe('标签页打开站点时使用默认路径', () => {
   it('输入密码但未保存时使用直接连接', async () => {
     const api = makeApi()
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1', { password: 'pw' })
@@ -123,8 +123,8 @@ describe('标签页打开站点时使用默认路径', () => {
       return { sessionId: `s${seq}`, host: 'h', port: 22, username: 'u' }
     })
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -147,8 +147,8 @@ describe('标签页打开站点时使用默认路径', () => {
   it('导航时记录历史，返回上一次路径不记录入历史', async () => {
     const api = makeApi()
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -179,8 +179,8 @@ describe('标签页打开站点时使用默认路径', () => {
   it('返回上级目录同样进入历史', async () => {
     const api = makeApi()
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
@@ -203,7 +203,7 @@ describe('标签导航竞态与历史', () => {
     const list = vi.fn(async (_sessionId: string, target: string) => {
       if (target === '/data/www') {
         await new Promise((r) => setTimeout(r, 10))
-        const tabs = await import('../src/renderer/src/stores/tabs')
+        const tabs = await import('../../src/renderer/src/stores/tabs')
         const nav = tabs.useTabs.getState().navigate(tabs.useTabs.getState().activeId ?? '', '/user/dir')
         await new Promise((r) => setTimeout(r, 30))
         await nav
@@ -222,8 +222,8 @@ describe('标签导航竞态与历史', () => {
       sites: { list: vi.fn(async () => [makeSite({ remotePath: '/data/www' })]) }
     }
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
 
@@ -247,8 +247,8 @@ describe('标签导航竞态与历史', () => {
       sites: { list: vi.fn(async () => [makeSite()]) }
     }
     installWindow(api)
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
     const id = useTabs.getState().activeTab()?.id ?? ''

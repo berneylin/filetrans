@@ -33,5 +33,5 @@ FileTrans：Electron + React + TypeScript 的双栏 SSH/SFTP 文件传输客户�
 ## 测试约定
 
 - 主进程传输引擎测试用 `tests/transfer-engine.test.ts` 的 FakeSession 模式。
-- 渲染层 store 测试在 node 环境需 stub `window` / `localStorage`；这类测试要同时加入 `tsconfig.node.json` 的 exclude 与 `tsconfig.web.json` 的 include（参考 `tests/visits.test.ts`）。
+- 渲染层 store 测试在 node 环境需 stub `window` / `localStorage`；这类测试一律放在 `tests/renderer/` 下（参考 `tests/renderer/visits.test.ts`），两个 tsconfig 已按目录通配，无需再逐个文件登记。
 - 真实 SFTP / rsync 行为走 `tests/sftp-e2e.test.ts`、`tests/sync-e2e.test.ts`（需要环境变量，默认跳过）。

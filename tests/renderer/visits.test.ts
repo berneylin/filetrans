@@ -50,7 +50,7 @@ function makeApi() {
 
 describe('pushRecent', () => {
   it('去重、最近优先、最多 5 条', async () => {
-    const { pushRecent } = await import('../src/renderer/src/stores/visits')
+    const { pushRecent } = await import('../../src/renderer/src/stores/visits')
     expect(pushRecent(undefined, '/a')).toEqual(['/a'])
     expect(pushRecent(['/a', '/b'], '/a')).toEqual(['/a', '/b'])
     expect(pushRecent(['/a', '/b'], '')).toEqual(['/a', '/b'])
@@ -71,7 +71,7 @@ describe('访问历史存储', () => {
   })
 
   it('本地与各站点分别记录且可清除', async () => {
-    const { useVisits } = await import('../src/renderer/src/stores/visits')
+    const { useVisits } = await import('../../src/renderer/src/stores/visits')
     for (const path of ['/w1', '/w2', '/w3', '/w4', '/w5', '/w6']) {
       useVisits.getState().recordLocal(path)
     }
@@ -90,12 +90,12 @@ describe('访问历史存储', () => {
   })
 
   it('重启后从本地存储恢复', async () => {
-    const first = await import('../src/renderer/src/stores/visits')
+    const first = await import('../../src/renderer/src/stores/visits')
     first.useVisits.getState().recordLocal('/persist/a')
     first.useVisits.getState().recordRemote('site-1', '/remote/x')
 
     vi.resetModules()
-    const second = await import('../src/renderer/src/stores/visits')
+    const second = await import('../../src/renderer/src/stores/visits')
     expect(second.useVisits.getState().local).toEqual(['/persist/a'])
     expect(second.useVisits.getState().remote['site-1']).toEqual(['/remote/x'])
   })
@@ -103,10 +103,10 @@ describe('访问历史存储', () => {
   it('导航成功后写入本地与远程历史', async () => {
     const api = makeApi()
     ;(globalThis as unknown as Record<string, unknown>).window = { api }
-    const { useSites } = await import('../src/renderer/src/stores/sites')
-    const { useTabs } = await import('../src/renderer/src/stores/tabs')
-    const { useFiles } = await import('../src/renderer/src/stores/files')
-    const { useVisits } = await import('../src/renderer/src/stores/visits')
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
+    const { useFiles } = await import('../../src/renderer/src/stores/files')
+    const { useVisits } = await import('../../src/renderer/src/stores/visits')
 
     await useSites.getState().loadSites()
     await useTabs.getState().openSite('site-1')
