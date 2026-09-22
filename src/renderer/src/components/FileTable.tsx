@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent
+} from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { File as FileIcon, Folder, Link2 } from 'lucide-react'
 import { formatDate, formatSize, modeToPermissionString } from '@shared/format'
@@ -12,7 +21,8 @@ import {
   usePane
 } from '../pane'
 import {
-  columnTemplate,
+  fitColumnTemplate,
+  preferredWidth,
   type ColumnKey,
   useColumns
 } from '../stores/columns'
@@ -133,7 +143,20 @@ export function FileTable({ side }: { side: PaneSide }) {
   const anchorRef = useRef<number | null>(null)
   const typeAheadRef = useRef({ buffer: '', at: 0 })
   const resizeRef = useRef<{ key: ColumnKey; startX: number; startWidth: number } | null>(null)
-  const template = columnTemplate(widths)
+  const [available, setAvailable] = useState(0)
+
+  const measureAvailable = useCallback((): void => {
+    const width = scrollRef.current?.clientWidth ?? 0
+    setAvailable((prev) => (prev === width ? prev : width))
+  }, [])
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const observer = new ResizeObserver(measureAvailable)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [measureAvailable])
 
   useEffect(() => {
     const onMove = (event: globalThis.MouseEvent): void => {
@@ -145,6 +168,7 @@ export function FileTable({ side }: { side: PaneSide }) {
       if (!resizeRef.current) return
       resizeRef.current = null
       document.body.style.cursor = ''
+      document.body.style.userSelect = ''
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -158,15 +182,19 @@ export function FileTable({ side }: { side: PaneSide }) {
     event.preventDefault()
     event.stopPropagation()
     const cell = (event.currentTarget as HTMLElement).parentElement
+    const rendered = cell?.getBoundingClientRect().width ?? 0
     resizeRef.current = {
       key,
       startX: event.clientX,
-      startWidth: cell?.getBoundingClientRect().width ?? 0
+      startWidth: Math.max(preferredWidth(widths, key), rendered)
     }
     document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
   }
 
   const resetColumnWidth = (key: ColumnKey): void => resetColumn(side, key)
+
+  const template = fitColumnTemplate(widths, available)
 
   const entries = useMemo(
     () => paneSortedEntries(side),
@@ -178,6 +206,8 @@ export function FileTable({ side }: { side: PaneSide }) {
     const parent = pane.listing?.parent
     return parent ? [parentEntry(parent), ...entries] : entries
   }, [entries, pane.listing?.parent])
+
+  useLayoutEffect(measureAvailable, [measureAvailable, rows.length])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -220,6 +250,9 @@ export function FileTable({ side }: { side: PaneSide }) {
     virtualizer.scrollToIndex(index, { align: 'auto' })
   }
 
+  const currentRowIndex = (): number =>
+    rows.findIndex((entry) => entry.name !== '..' && pane.selected.includes(entry.name))
+
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.target !== event.currentTarget) return
     if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'a') {
@@ -230,24 +263,58 @@ export function FileTable({ side }: { side: PaneSide }) {
       typeAheadRef.current = { buffer: '', at: 0 }
       return
     }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      let next = currentRowIndex()
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      for (;;) {
+        next += step
+        if (next < 0 || next >= rows.length) return
+        if (rows[next].name !== '..') break
+      }
+      typeAheadRef.current = { buffer: '', at: 0 }
+      selectIndex(next)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.stopPropagation()
+      const selected = entries.filter((entry) => pane.selected.includes(entry.name))
+      if (selected.length === 1) activateEntry(side, selected[0])
+      return
+    }
+    if (event.key === 'Backspace') {
+      event.preventDefault()
+      event.stopPropagation()
+      void paneNavigateUp(side)
+      return
+    }
     if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return
     const key = event.key.toLowerCase()
     const now = Date.now()
     const state = typeAheadRef.current
     const buffer = now - state.at < 800 ? state.buffer + key : key
     state.at = now
-    const match = rows.findIndex(
-      (entry) => entry.name !== '..' && entry.name.toLowerCase().startsWith(buffer)
-    )
+    const refining = buffer.length > 1
+    const findMatch = (prefix: string): number => {
+      const current = currentRowIndex()
+      const start = refining && prefix === buffer ? Math.max(current, 0) : current + 1
+      for (let offset = 0; offset < rows.length; offset++) {
+        const index = (start + offset) % rows.length
+        const entry = rows[index]
+        if (entry.name !== '..' && entry.name.toLowerCase().startsWith(prefix)) return index
+      }
+      return -1
+    }
+    const match = findMatch(buffer)
     if (match !== -1) {
       state.buffer = buffer
       event.preventDefault()
       selectIndex(match)
       return
     }
-    const fallback = rows.findIndex(
-      (entry) => entry.name !== '..' && entry.name.toLowerCase().startsWith(key)
-    )
+    const fallback = findMatch(key)
     if (fallback !== -1) {
       state.buffer = key
       event.preventDefault()
@@ -260,7 +327,7 @@ export function FileTable({ side }: { side: PaneSide }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        className="grid w-full border-b border-gray-300 bg-gray-100 text-gray-600"
+        className="grid w-full overflow-hidden border-b border-gray-300 bg-gray-100 text-gray-600"
         style={{ gridTemplateColumns: template }}
       >
         <HeaderCell

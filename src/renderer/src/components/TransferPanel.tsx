@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -9,6 +9,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  SkipForward,
   X
 } from 'lucide-react'
 import { formatEta, formatSize, formatSpeed } from '@shared/format'
@@ -133,7 +134,8 @@ function SyncRow({ job }: { job: SyncJob }) {
   const [logText, setLogText] = useState('')
   const [logLoading, setLogLoading] = useState(false)
 
-  const totalBytes = job.percent > 0 ? job.transferredBytes / Math.min(1, job.percent / 100) : 0
+  const ratio = Math.min(1, job.percent / 100)
+  const totalBytes = job.percent > 0 ? job.transferredBytes / ratio : 0
   const eta =
     job.status === 'running' ? formatEta(totalBytes - job.transferredBytes, job.speed) : ''
 
@@ -218,6 +220,134 @@ function SyncRow({ job }: { job: SyncJob }) {
     </div>
   )
 }
+
+interface GroupRowProps {
+  group: TransferGroup
+  onPause: (id: string) => void
+  onResume: (id: string) => void
+  onCancel: (id: string) => void
+}
+
+const TransferGroupRow = memo(function TransferGroupRow({
+  group,
+  onPause,
+  onResume,
+  onCancel
+}: GroupRowProps) {
+  return (
+    <div className="border-b border-gray-100 last:border-b-0">
+      <div className="flex items-center gap-2 px-2 py-1">
+        {group.direction === 'upload' ? (
+          <ArrowUp size={13} className="shrink-0 text-blue-500" />
+        ) : (
+          <ArrowDown size={13} className="shrink-0 text-green-600" />
+        )}
+        <span className="w-40 truncate" title={group.sourceLabel}>
+          {group.sourceLabel}
+        </span>
+        <span className="text-gray-400">→</span>
+        <span className="w-48 truncate text-gray-500" title={group.targetDir}>
+          {group.targetDir}
+        </span>
+        <div className="min-w-40 flex-1">
+          <ProgressBar group={group} />
+        </div>
+        <span className="w-16 text-right text-gray-500">{formatSize(group.totalBytes)}</span>
+        <span className="w-16 text-right text-gray-500">{formatSpeed(group.speed)}</span>
+        <span className="w-24 text-right text-gray-500">
+          {group.status === 'active'
+            ? formatEta(group.totalBytes - group.transferredBytes, group.speed)
+            : ''}
+        </span>
+        <span className="w-14 text-right text-gray-500">
+          {group.doneFiles}/{group.totalFiles}
+        </span>
+        <span className={`w-16 ${STATUS_CLASS[group.status]}`}>{statusText(group)}</span>
+        <button
+          className="shrink-0 text-gray-400 hover:text-amber-600 disabled:opacity-30"
+          disabled={group.status !== 'active'}
+          title="暂停"
+          onClick={() => onPause(group.id)}
+        >
+          <Pause size={13} />
+        </button>
+        <button
+          className="shrink-0 text-gray-400 hover:text-green-600 disabled:opacity-30"
+          disabled={group.status !== 'paused'}
+          title="继续"
+          onClick={() => onResume(group.id)}
+        >
+          <Play size={13} />
+        </button>
+        <button
+          className="shrink-0 text-gray-400 hover:text-red-600 disabled:opacity-30"
+          disabled={
+            group.status !== 'active' &&
+            group.status !== 'pending' &&
+            group.status !== 'paused'
+          }
+          title="取消"
+          onClick={() => onCancel(group.id)}
+        >
+          <X size={13} />
+        </button>
+        {group.error && (
+          <span className="max-w-60 truncate text-red-600" title={group.error}>
+            {group.error}
+          </span>
+        )}
+        {!group.error && group.warning && (
+          <span className="max-w-60 truncate text-amber-600" title={group.warning}>
+            {group.warning}
+          </span>
+        )}
+      </div>
+      {group.activeFiles && group.activeFiles.length > 0 && (
+        <div className="pb-1">
+          {group.activeFiles.map((file) => (
+            <FileRow key={file.id} file={file} />
+          ))}
+        </div>
+      )}
+      {group.failedFiles && group.failedFiles.length > 0 && (
+        <div className="pb-1">
+          {group.failedFiles.map((file) => (
+            <div
+              key={file.id}
+              className="flex items-center gap-2 px-2 py-0.5 pl-7 text-[11px] text-red-600"
+            >
+              <X size={12} className="shrink-0" />
+              <span className="min-w-24 flex-1 truncate" title={file.path}>
+                {file.name}
+              </span>
+              <span className="min-w-24 max-w-1/2 truncate" title={file.error}>
+                {file.error}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {group.skippedFiles && group.skippedFiles.length > 0 && (
+        <div className="pb-1">
+          {group.skippedFiles.map((file) => (
+            <div
+              key={file.id}
+              className="flex items-center gap-2 px-2 py-0.5 pl-7 text-[11px] text-amber-600"
+            >
+              <SkipForward size={12} className="shrink-0" />
+              <span className="min-w-24 flex-1 truncate" title={file.path}>
+                {file.name}
+              </span>
+              <span className="min-w-24 max-w-1/2 truncate" title={file.error}>
+                {file.error}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
 
 export function TransferPanel() {
   const groups = useTransfers((state) => state.groups)
@@ -313,8 +443,8 @@ export function TransferPanel() {
             className={btn}
             disabled={groups.length === 0 && syncJobs.length === 0}
             onClick={() => {
-              clearFinished()
-              clearSyncFinished()
+              void clearFinished()
+              void clearSyncFinished()
             }}
           >
             清除已完成
@@ -328,100 +458,13 @@ export function TransferPanel() {
           ) : (
             <>
               {groups.map((group) => (
-                <div key={group.id} className="border-b border-gray-100 last:border-b-0">
-                  <div className="flex items-center gap-2 px-2 py-1">
-                    {group.direction === 'upload' ? (
-                      <ArrowUp size={13} className="shrink-0 text-blue-500" />
-                    ) : (
-                      <ArrowDown size={13} className="shrink-0 text-green-600" />
-                    )}
-                    <span className="w-40 truncate" title={group.sourceLabel}>
-                      {group.sourceLabel}
-                    </span>
-                    <span className="text-gray-400">→</span>
-                    <span className="w-48 truncate text-gray-500" title={group.targetDir}>
-                      {group.targetDir}
-                    </span>
-                    <div className="min-w-40 flex-1">
-                      <ProgressBar group={group} />
-                    </div>
-                    <span className="w-16 text-right text-gray-500">
-                      {formatSize(group.totalBytes)}
-                    </span>
-                    <span className="w-16 text-right text-gray-500">
-                      {formatSpeed(group.speed)}
-                    </span>
-                    <span className="w-24 text-right text-gray-500">
-                      {group.status === 'active'
-                        ? formatEta(group.totalBytes - group.transferredBytes, group.speed)
-                        : ''}
-                    </span>
-                    <span className="w-14 text-right text-gray-500">
-                      {group.doneFiles}/{group.totalFiles}
-                    </span>
-                    <span className={`w-16 ${STATUS_CLASS[group.status]}`}>
-                      {statusText(group)}
-                    </span>
-                    <button
-                      className="shrink-0 text-gray-400 hover:text-amber-600 disabled:opacity-30"
-                      disabled={group.status !== 'active'}
-                      title="暂停"
-                      onClick={() => void pause(group.id)}
-                    >
-                      <Pause size={13} />
-                    </button>
-                    <button
-                      className="shrink-0 text-gray-400 hover:text-green-600 disabled:opacity-30"
-                      disabled={group.status !== 'paused'}
-                      title="继续"
-                      onClick={() => void resume(group.id)}
-                    >
-                      <Play size={13} />
-                    </button>
-                    <button
-                      className="shrink-0 text-gray-400 hover:text-red-600 disabled:opacity-30"
-                      disabled={
-                        group.status !== 'active' &&
-                        group.status !== 'pending' &&
-                        group.status !== 'paused'
-                      }
-                      title="取消"
-                      onClick={() => void cancel(group.id)}
-                    >
-                      <X size={13} />
-                    </button>
-                    {group.error && (
-                      <span className="max-w-60 truncate text-red-600" title={group.error}>
-                        {group.error}
-                      </span>
-                    )}
-                  </div>
-                  {group.activeFiles && group.activeFiles.length > 0 && (
-                    <div className="pb-1">
-                      {group.activeFiles.map((file) => (
-                        <FileRow key={file.id} file={file} />
-                      ))}
-                    </div>
-                  )}
-                  {group.failedFiles && group.failedFiles.length > 0 && (
-                    <div className="pb-1">
-                      {group.failedFiles.map((file) => (
-                        <div
-                          key={file.id}
-                          className="flex items-center gap-2 px-2 py-0.5 pl-7 text-[11px] text-red-600"
-                        >
-                          <X size={12} className="shrink-0" />
-                          <span className="min-w-24 flex-1 truncate" title={file.path}>
-                            {file.name}
-                          </span>
-                          <span className="min-w-24 max-w-1/2 truncate" title={file.error}>
-                            {file.error}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <TransferGroupRow
+                  key={group.id}
+                  group={group}
+                  onPause={(id) => void pause(id)}
+                  onResume={(id) => void resume(id)}
+                  onCancel={(id) => void cancel(id)}
+                />
               ))}
               {syncJobs.length > 0 && (
                 <div className="border-b border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-500">

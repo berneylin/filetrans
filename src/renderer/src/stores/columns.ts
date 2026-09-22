@@ -15,7 +15,7 @@ export interface ColumnWidths {
 export type PaneWidths = Record<PaneSide, ColumnWidths>
 
 export const MIN_WIDTHS: Record<ColumnKey, number> = {
-  name: 100,
+  name: 140,
   size: 52,
   type: 48,
   mtime: 88,
@@ -30,13 +30,44 @@ export const DEFAULT_COLUMNS: ColumnWidths = {
   permissions: 100
 }
 
+const COLUMN_KEYS: ColumnKey[] = ['name', 'size', 'type', 'mtime', 'permissions']
+
+export function preferredWidth(widths: ColumnWidths, key: ColumnKey): number {
+  const value = widths[key]
+  return typeof value === 'number' ? Math.max(MIN_WIDTHS[key], value) : MIN_WIDTHS[key]
+}
+
 export function columnTemplate(widths: ColumnWidths): string {
-  const name = widths.name === 'auto' ? 'minmax(140px, 1fr)' : `${Math.max(MIN_WIDTHS.name, widths.name)}px`
-  const size = Math.max(MIN_WIDTHS.size, widths.size)
-  const type = Math.max(MIN_WIDTHS.type, widths.type)
-  const mtime = Math.max(MIN_WIDTHS.mtime, widths.mtime)
-  const permissions = Math.max(MIN_WIDTHS.permissions, widths.permissions)
-  return `${name} ${size}px ${type}px ${mtime}px ${permissions}px`
+  const name = widths.name === 'auto' ? 'minmax(140px, 1fr)' : `${preferredWidth(widths, 'name')}px`
+  return [name, ...COLUMN_KEYS.slice(1).map((key) => `${preferredWidth(widths, key)}px`)].join(' ')
+}
+
+export function fitColumnTemplate(widths: ColumnWidths, available: number): string {
+  if (!(available > 0)) return columnTemplate(widths)
+  const budget = Math.floor(available)
+  const preferred = COLUMN_KEYS.map((key) => preferredWidth(widths, key))
+  const total = preferred.reduce((sum, width) => sum + width, 0)
+
+  let fitted: number[]
+  if (total <= budget) {
+    if (widths.name !== 'auto') return preferred.map((width) => `${width}px`).join(' ')
+    fitted = [...preferred]
+    fitted[0] = budget - (total - preferred[0])
+  } else {
+    const deficit = total - budget
+    const slack = preferred.map((width, index) => width - MIN_WIDTHS[COLUMN_KEYS[index]])
+    const totalSlack = slack.reduce((sum, value) => sum + value, 0)
+    fitted =
+      totalSlack >= deficit
+        ? preferred.map((width, index) =>
+            Math.max(MIN_WIDTHS[COLUMN_KEYS[index]], width - (deficit * slack[index]) / totalSlack)
+          )
+        : preferred.map((width) => (width * budget) / total)
+  }
+
+  const rounded = fitted.map((width) => Math.floor(width))
+  rounded[0] += Math.max(0, Math.round(budget - rounded.reduce((sum, width) => sum + width, 0)))
+  return rounded.map((width) => `${width}px`).join(' ')
 }
 
 const DEFAULT_PANE_WIDTHS: PaneWidths = {

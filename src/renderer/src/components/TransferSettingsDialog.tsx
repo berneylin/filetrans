@@ -12,6 +12,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
   const [resume, setResume] = useState(settings.resume)
   const [retries, setRetries] = useState(String(settings.retries))
   const [concurrency, setConcurrency] = useState(String(settings.concurrency))
+  const [fileConcurrency, setFileConcurrency] = useState(String(settings.fileConcurrency))
   const [preserveTimestamps, setPreserveTimestamps] = useState(settings.preserveTimestamps)
   const [preservePermissions, setPreservePermissions] = useState(settings.preservePermissions)
   const [syncBannedPaths, setSyncBannedPaths] = useState(settings.syncBannedPaths)
@@ -21,6 +22,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
       resume,
       retries: Math.max(0, Math.min(10, Number(retries) || 0)),
       concurrency: Math.max(1, Math.min(16, Number(concurrency) || 1)),
+      fileConcurrency: Math.max(1, Math.min(8, Number(fileConcurrency) || 1)),
       preserveTimestamps,
       preservePermissions,
       syncBannedPaths
@@ -67,6 +69,17 @@ export function TransferSettingsDialog({ onClose }: Props) {
             onChange={(e) => setConcurrency(e.target.value.replace(/[^0-9]/g, ''))}
           />
         </label>
+        <label className="flex items-start gap-2">
+          <span>
+            同时传输文件数
+            <span className="block text-gray-500">1-8，多个文件并行传输</span>
+          </span>
+          <input
+            className={`${dialogInput} ml-auto w-16`}
+            value={fileConcurrency}
+            onChange={(e) => setFileConcurrency(e.target.value.replace(/[^0-9]/g, ''))}
+          />
+        </label>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -94,7 +107,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
               placeholder="每行一个目录，如 /home/sunqy/repos"
             />
             <span className="mt-1 block text-gray-500">
-              列表中的目录不能作为同步的本地目录或远程目录，路径结尾的 / 会被忽略。
+              每行一个目录；仅校验同步的起止目录本身，路径结尾的 / 会被忽略。
             </span>
           </label>
         </div>

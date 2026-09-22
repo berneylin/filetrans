@@ -65,6 +65,7 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
           resume: settings.resume,
           retries: settings.retries,
           concurrency: settings.concurrency,
+          fileConcurrency: settings.fileConcurrency,
           preserveTimestamps: settings.preserveTimestamps,
           preservePermissions: settings.preservePermissions
         }
@@ -141,6 +142,9 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
           group.status === 'paused'
       )
     }))
+    void window.api.transfers.clearFinished().catch(() => {
+      /* 主进程不可用时忽略 */
+    })
   },
 
   setError: (message) => set({ error: message })

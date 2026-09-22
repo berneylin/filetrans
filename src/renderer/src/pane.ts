@@ -44,9 +44,13 @@ function tabToPane(tab: ReturnType<typeof useTabs.getState>['tabs'][number] | nu
 }
 
 export function usePane(side: PaneSide): PaneData {
-  const local = useFiles((state) => state.local)
-  const tab = useTabs((state) => state.tabs.find((item) => item.id === state.activeId) ?? null)
-  if (side === 'local') return { ...local, connected: true, canGoBack: local.back.length > 0 }
+  const local = useFiles((state) => (side === 'local' ? state.local : null))
+  const tab = useTabs((state) =>
+    side === 'remote' ? (state.tabs.find((item) => item.id === state.activeId) ?? null) : null
+  )
+  if (side === 'local' && local) {
+    return { ...local, connected: true, canGoBack: local.back.length > 0 }
+  }
   return tabToPane(tab)
 }
 

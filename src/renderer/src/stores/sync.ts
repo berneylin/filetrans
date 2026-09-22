@@ -31,5 +31,8 @@ export const useSync = create<SyncStore>((set) => ({
 
   clearFinished: () => {
     set((state) => ({ jobs: state.jobs.filter((job) => job.status === 'running') }))
+    void window.api.sync.clearFinished().catch(() => {
+      /* 主进程不可用时忽略 */
+    })
   }
 }))

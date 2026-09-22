@@ -25,6 +25,14 @@ describe('modeToPermissionString', () => {
   it('处理可执行文件', () => {
     expect(modeToPermissionString(0o100755)).toBe('-rwxr-xr-x')
   })
+  it('渲染 setuid/setgid/sticky 特殊位', () => {
+    expect(modeToPermissionString(0o104755)).toBe('-rwsr-xr-x')
+    expect(modeToPermissionString(0o100644 | 0o4000)).toBe('-rwSr--r--')
+    expect(modeToPermissionString(0o102755)).toBe('-rwxr-sr-x')
+    expect(modeToPermissionString(0o100755 | 0o2000)).toBe('-rwxr-sr-x')
+    expect(modeToPermissionString(0o101755)).toBe('-rwxr-xr-t')
+    expect(modeToPermissionString(0o100754 | 0o1000)).toBe('-rwxr-xr-T')
+  })
 })
 
 describe('typeFromMode', () => {
@@ -64,6 +72,11 @@ describe('formatSize', () => {
     expect(formatSize(1024)).toBe('1.0 KB')
     expect(formatSize(1536)).toBe('1.5 KB')
     expect(formatSize(1024 * 1024)).toBe('1.0 MB')
+  })
+  it('超过 TB 时使用 PB', () => {
+    expect(formatSize(1024 ** 4)).toBe('1.0 TB')
+    expect(formatSize(1024 ** 5)).toBe('1.0 PB')
+    expect(formatSize(2 * 1024 ** 5)).toBe('2.0 PB')
   })
 })
 

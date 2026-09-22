@@ -21,11 +21,19 @@ export function typeFromMode(mode: number): FileEntry['type'] {
 export function modeToPermissionString(mode: number): string {
   const typeChar =
     (mode & S_IFMT) === S_IFDIR ? 'd' : (mode & S_IFMT) === S_IFLNK ? 'l' : '-'
-  const bits = ['r', 'w', 'x']
+  const specialChars = ['t', 's', 's']
   let out = typeChar
-  for (let shift = 8; shift >= 0; shift--) {
-    const bit = (mode >> shift) & 1
-    out += bit ? bits[(8 - shift) % 3] : '-'
+  for (let group = 2; group >= 0; group--) {
+    const base = group * 3
+    out += (mode >> (base + 2)) & 1 ? 'r' : '-'
+    out += (mode >> (base + 1)) & 1 ? 'w' : '-'
+    const execute = (mode >> base) & 1
+    const special = (mode >> (9 + group)) & 1
+    if (special) {
+      out += execute ? specialChars[group] : specialChars[group].toUpperCase()
+    } else {
+      out += execute ? 'x' : '-'
+    }
   }
   return out
 }
@@ -80,7 +88,7 @@ export function bitsToMode(bits: PermissionBits): number {
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
   let value = bytes
   let unit = 'B'
   for (const u of units) {
