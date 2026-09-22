@@ -43,7 +43,7 @@ describe('openInFileBrowser', () => {
     process.chdir(root)
     try {
       await openInFileBrowser('sub')
-      expect(opened).toEqual([dir])
+      expect(opened).toEqual([path.join(process.cwd(), 'sub')])
     } finally {
       process.chdir(cwd)
     }
