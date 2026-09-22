@@ -87,3 +87,13 @@ export function findBannedDir(candidate: string, banned: readonly string[]): str
   }
   return null
 }
+
+const BACKUP_SUFFIX_RE = /\.filetrans-backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isTransientFile(name: string): boolean {
+  return (
+    name.endsWith('.filetrans-part') ||
+    name.endsWith('.filetrans-part.json') ||
+    BACKUP_SUFFIX_RE.test(name)
+  )
+}

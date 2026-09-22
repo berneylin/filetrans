@@ -9,6 +9,7 @@ export const IPC = {
   localRemove: 'local:remove',
   localChmod: 'local:chmod',
   localOpenInBrowser: 'local:open-in-browser',
+  localCleanTransientFiles: 'local:clean-transient-files',
 
   sftpConnect: 'sftp:connect',
   sftpConnectSite: 'sftp:connect-site',
@@ -20,6 +21,7 @@ export const IPC = {
   sftpRemove: 'sftp:remove',
   sftpChmod: 'sftp:chmod',
   sftpCheckKey: 'sftp:check-key',
+  sftpCleanTransientFiles: 'sftp:clean-transient-files',
 
   sitesList: 'sites:list',
   sitesSave: 'sites:save',
@@ -34,10 +36,12 @@ export const IPC = {
   transferResolveConflict: 'transfer:resolve-conflict',
   transferList: 'transfer:list',
   transferListConflicts: 'transfer:list-conflicts',
+  transferClearFinished: 'transfer:clear-finished',
 
   syncStart: 'sync:start',
   syncCancel: 'sync:cancel',
   syncGetLog: 'sync:get-log',
+  syncClearFinished: 'sync:clear-finished',
 
   hostkeyRespond: 'hostkey:respond',
 

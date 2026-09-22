@@ -29,6 +29,13 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devUrl = process.env['ELECTRON_RENDERER_URL']
+    const allowed = devUrl ? url.startsWith(devUrl) : url.startsWith('file://')
+    if (!allowed) event.preventDefault()
+  })
+
   if (process.env['ELECTRON_RENDERER_URL']) {
     void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -36,31 +43,41 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
-  if (process.platform !== 'darwin') {
-    const menu = Menu.buildFromTemplate([
-      {
-        label: '编辑',
-        submenu: [
-          { role: 'undo', label: '撤销' },
-          { role: 'redo', label: '重做' },
-          { type: 'separator' },
-          { role: 'cut', label: '剪切' },
-          { role: 'copy', label: '复制' },
-          { role: 'paste', label: '粘贴' },
-          { role: 'selectAll', label: '全选' }
-        ] satisfies MenuItemConstructorOptions[]
-      }
-    ])
-    Menu.setApplicationMenu(menu)
-  }
-  registerIpc(() => mainWindow)
-  createWindow()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
   })
-})
+
+  app.whenReady().then(() => {
+    if (process.platform !== 'darwin') {
+      const menu = Menu.buildFromTemplate([
+        {
+          label: '编辑',
+          submenu: [
+            { role: 'undo', label: '撤销' },
+            { role: 'redo', label: '重做' },
+            { type: 'separator' },
+            { role: 'cut', label: '剪切' },
+            { role: 'copy', label: '复制' },
+            { role: 'paste', label: '粘贴' },
+            { role: 'selectAll', label: '全选' }
+          ] satisfies MenuItemConstructorOptions[]
+        }
+      ])
+      Menu.setApplicationMenu(menu)
+    }
+    registerIpc(() => mainWindow)
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

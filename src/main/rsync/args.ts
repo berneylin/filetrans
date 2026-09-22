@@ -48,6 +48,7 @@ export function buildRsyncArgs(t: RsyncTargetOptions): string[] {
   if (t.deleteExtraneous) args.push('--delete')
   if (t.compress) args.push(gnu && t.zstd ? '--zc=zstd' : '-z')
   args.push('-e', t.rsh)
+  args.push('--')
   const local = withTrailingSlash(t.localPath)
   const remote = `${t.user}@${t.host}:`
   if (t.direction === 'upload') {
@@ -96,8 +97,9 @@ export function buildRshScript(configPath: string): string {
   return `#!/bin/sh\nexec ssh -F "${configPath}" "$@"\n`
 }
 
-export function buildAskpassScript(): string {
-  return '#!/bin/sh\nexec printf \'%s\' "$FILETRANS_SSH_SECRET"\n'
+export function buildAskpassScript(secretPath: string): string {
+  if (/["\\\n]/.test(secretPath)) throw new Error('临时路径包含不支持的字符')
+  return `#!/bin/sh\nexec cat "${secretPath}"\n`
 }
 
 export function parseHostKeyAlgorithm(blob: Buffer): string | null {

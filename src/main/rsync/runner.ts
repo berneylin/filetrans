@@ -184,8 +184,10 @@ export class RsyncManager {
       const secret = keyPath ? params.passphrase : params.password
       let askpassPath: string | undefined
       if (secret) {
+        const secretPath = path.join(tempDir, 'secret')
+        await fs.writeFile(secretPath, secret, { mode: 0o600 })
         askpassPath = path.join(tempDir, 'askpass')
-        await fs.writeFile(askpassPath, buildAskpassScript(), { mode: 0o700 })
+        await fs.writeFile(askpassPath, buildAskpassScript(secretPath), { mode: 0o700 })
       }
 
       const modernGnu = info.dialect === 'gnu' && info.modern
@@ -211,10 +213,10 @@ export class RsyncManager {
       env = { ...process.env }
       delete env.SSH_ASKPASS
       delete env.SSH_ASKPASS_REQUIRE
+      delete env.FILETRANS_SSH_SECRET
       if (askpassPath) {
         env.SSH_ASKPASS = askpassPath
         env.SSH_ASKPASS_REQUIRE = 'force'
-        env.FILETRANS_SSH_SECRET = secret
       }
 
       job = {
@@ -450,6 +452,12 @@ export class RsyncManager {
     const state = this.jobs.get(id)
     if (!state) return ''
     return state.logLines.join('\n')
+  }
+
+  clearFinished(): void {
+    for (const [id, state] of this.jobs) {
+      if (state.job.status !== 'running') this.jobs.delete(id)
+    }
   }
 
   async killAll(): Promise<void> {

@@ -39,7 +39,8 @@ const api: FileTransApi = {
     rename: (path, newName) => invoke(IPC.localRename, path, newName),
     remove: (paths) => invoke(IPC.localRemove, paths),
     chmod: (path, mode) => invoke(IPC.localChmod, path, mode),
-    openInBrowser: (path) => invoke(IPC.localOpenInBrowser, path)
+    openInBrowser: (path) => invoke(IPC.localOpenInBrowser, path),
+    cleanTransientFiles: (path) => invoke(IPC.localCleanTransientFiles, path)
   },
 
   sftp: {
@@ -49,10 +50,12 @@ const api: FileTransApi = {
     list: (sessionId, path) => invoke(IPC.sftpList, sessionId, path),
     home: (sessionId) => invoke(IPC.sftpHome, sessionId),
     mkdir: (sessionId, parent, name) => invoke(IPC.sftpMkdir, sessionId, parent, name),
-    rename: (sessionId, path, newName) => invoke(IPC.sftpRename, sessionId, path, newName),
+    rename: (sessionId, target, newName) => invoke(IPC.sftpRename, sessionId, target, newName),
     remove: (sessionId, paths) => invoke(IPC.sftpRemove, sessionId, paths),
     chmod: (sessionId, path, mode) => invoke(IPC.sftpChmod, sessionId, path, mode),
-    checkKey: (path, passphrase) => invoke(IPC.sftpCheckKey, path, passphrase)
+    checkKey: (path, passphrase) => invoke(IPC.sftpCheckKey, path, passphrase),
+    cleanTransientFiles: (sessionId, path) =>
+      invoke(IPC.sftpCleanTransientFiles, sessionId, path)
   },
 
   sites: {
@@ -71,13 +74,15 @@ const api: FileTransApi = {
     resolveConflict: (id, resolution: ConflictResolution) =>
       invoke(IPC.transferResolveConflict, id, resolution),
     list: () => invoke(IPC.transferList),
-    listConflicts: () => invoke(IPC.transferListConflicts)
+    listConflicts: () => invoke(IPC.transferListConflicts),
+    clearFinished: () => invoke(IPC.transferClearFinished)
   },
 
   sync: {
     start: (req: SyncStartRequest) => invoke(IPC.syncStart, req),
     cancel: (id) => invoke(IPC.syncCancel, id),
-    getLog: (id) => invoke(IPC.syncGetLog, id)
+    getLog: (id) => invoke(IPC.syncGetLog, id),
+    clearFinished: () => invoke(IPC.syncClearFinished)
   },
 
   hostkey: {

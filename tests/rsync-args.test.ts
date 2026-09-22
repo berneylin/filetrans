@@ -37,6 +37,7 @@ describe('buildRsyncArgs', () => {
       '--zc=zstd',
       '-e',
       '/tmp/rsh',
+      '--',
       '/home/user/models/',
       'root@10.0.0.2:/mnt/pfs/code/models'
     ])
@@ -88,9 +89,16 @@ describe('buildRsyncArgs', () => {
       '-z',
       '-e',
       '/tmp/rsh',
+      '--',
       '/home/user/models/',
       'root@10.0.0.2:/mnt/pfs/code/models'
     ])
+  })
+
+  it('位置参数用 -- 隔断，以 - 开头的路径不当作选项', () => {
+    const args = buildRsyncArgs({ ...base, direction: 'upload', localPath: '/a/-weird' })
+    expect(args[args.length - 3]).toBe('--')
+    expect(args[args.length - 2]).toBe('/a/-weird/')
   })
 
   it('openrsync 关闭压缩时不带 -z', () => {
@@ -215,8 +223,13 @@ describe('buildRshScript / buildAskpassScript', () => {
     expect(script).toContain('exec ssh -F "/tmp/dir/config" "$@"')
   })
 
-  it('askpass 脚本从环境变量读取密钥', () => {
-    expect(buildAskpassScript()).toContain('$FILETRANS_SSH_SECRET')
+  it('askpass 脚本从临时密钥文件读取凭据', () => {
+    expect(buildAskpassScript('/tmp/dir/secret')).toContain('exec cat "/tmp/dir/secret"')
+    expect(buildAskpassScript('/tmp/dir/secret')).not.toContain('SECRET')
+  })
+
+  it('askpass 路径包含引号时抛错', () => {
+    expect(() => buildAskpassScript('/tmp/a"b/secret')).toThrow()
   })
 
   it('配置路径包含引号时抛错', () => {

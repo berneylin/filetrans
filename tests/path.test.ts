@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   escapesParent,
   findBannedDir,
+  isTransientFile,
   posixBasename,
   posixDirname,
   posixJoin,
@@ -130,5 +131,23 @@ describe('findBannedDir', () => {
 
   it('忽略候选路径两端空白', () => {
     expect(findBannedDir('  /home/sunqy/repos  ', banned)).toBe('/home/sunqy/repos')
+  })
+})
+
+describe('isTransientFile', () => {
+  it('识别传输中与回滚备份产生的临时文件', () => {
+    expect(isTransientFile('movie.mkv.filetrans-part')).toBe(true)
+    expect(isTransientFile('movie.mkv.filetrans-part.json')).toBe(true)
+    expect(
+      isTransientFile('movie.mkv.filetrans-backup-2f1c9a7e-4b3d-4c8a-9f2e-7d6c5b4a3e21')
+    ).toBe(true)
+  })
+
+  it('不误伤仅包含相同片段的普通文件', () => {
+    expect(isTransientFile('movie.mkv.filetrans-part.json.bak')).toBe(false)
+    expect(isTransientFile('notes-about-.filetrans-backup-format.md')).toBe(false)
+    expect(isTransientFile('.filetrans-backup-not-a-uuid')).toBe(false)
+    expect(isTransientFile('movie.filetrans-part.mkv')).toBe(false)
+    expect(isTransientFile('movie.mkv')).toBe(false)
   })
 })

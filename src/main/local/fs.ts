@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { shell } from 'electron'
 import type { DirListing, EntryType, FileEntry } from '@shared/types'
-import { validateDirectoryPath, escapesParent } from '@shared/path'
+import { validateDirectoryPath, escapesParent, isTransientFile } from '@shared/path'
 import { assertPermissionMode } from '@shared/format'
 
 function friendlyError(err: unknown, target: string): Error {
@@ -92,8 +92,31 @@ export async function listLocal(dirPath: string): Promise<DirListing> {
   return {
     path: resolved,
     parent: path.dirname(resolved) === resolved ? null : path.dirname(resolved),
-    entries: entries.filter((e): e is FileEntry => e !== null)
+    entries: entries.filter(
+      (e): e is FileEntry => e !== null && !isTransientFile(e.name)
+    )
   }
+}
+
+export async function cleanTransientFiles(dirPath: string): Promise<number> {
+  const resolved = path.resolve(dirPath)
+  let dirents
+  try {
+    dirents = await fs.readdir(resolved, { withFileTypes: true })
+  } catch (err) {
+    throw friendlyError(err, resolved)
+  }
+  let removed = 0
+  for (const dirent of dirents) {
+    if (dirent.isDirectory() || !isTransientFile(dirent.name)) continue
+    try {
+      await fs.rm(path.join(resolved, dirent.name), { force: true })
+      removed++
+    } catch {
+      /* 单个清理失败不阻断 */
+    }
+  }
+  return removed
 }
 
 export async function makeDir(parent: string, name: string): Promise<string> {

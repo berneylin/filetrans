@@ -8,11 +8,88 @@ import { TransferManager } from './sftp/transfer'
 import { RsyncManager } from './rsync/runner'
 import { deleteSite, consumeDataIssues, encryptionAvailable, getSiteWithSecret, listSites, saveSite } from './storage'
 
+function assertObject(value: unknown, message: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) throw new Error(message)
+  return value as Record<string, unknown>
+}
+
+function assertConnectParams(value: unknown): asserts value is ConnectParams {
+  const params = assertObject(value, '无效的连接参数')
+  if (
+    typeof params.host !== 'string' ||
+    !params.host.trim() ||
+    typeof params.port !== 'number' ||
+    !Number.isInteger(params.port) ||
+    params.port < 1 ||
+    params.port > 65535 ||
+    typeof params.username !== 'string' ||
+    !params.username.trim()
+  ) {
+    throw new Error('无效的连接参数')
+  }
+}
+
+function assertSiteInput(value: unknown): asserts value is SiteInput {
+  const input = assertObject(value, '无效的站点配置')
+  if (
+    typeof input.name !== 'string' ||
+    !input.name.trim() ||
+    typeof input.host !== 'string' ||
+    !input.host.trim() ||
+    typeof input.port !== 'number' ||
+    !Number.isInteger(input.port) ||
+    input.port < 1 ||
+    input.port > 65535 ||
+    typeof input.username !== 'string' ||
+    !input.username.trim() ||
+    (input.authType !== 'password' && input.authType !== 'key')
+  ) {
+    throw new Error('无效的站点配置')
+  }
+}
+
+function assertTransferStartRequest(value: unknown): asserts value is TransferStartRequest {
+  const req = assertObject(value, '无效的传输请求')
+  if (
+    typeof req.sessionId !== 'string' ||
+    !req.sessionId ||
+    (req.direction !== 'upload' && req.direction !== 'download') ||
+    !Array.isArray(req.sources) ||
+    req.sources.length === 0 ||
+    req.sources.some((item) => typeof item !== 'string' || !item.trim()) ||
+    typeof req.targetDir !== 'string' ||
+    !req.targetDir.trim()
+  ) {
+    throw new Error('无效的传输请求')
+  }
+}
+
+function assertSyncStartRequest(value: unknown): asserts value is SyncStartRequest {
+  const req = assertObject(value, '无效的同步请求')
+  if (
+    typeof req.sessionId !== 'string' ||
+    !req.sessionId ||
+    (req.direction !== 'upload' && req.direction !== 'download') ||
+    typeof req.localPath !== 'string' ||
+    !req.localPath.trim() ||
+    typeof req.remotePath !== 'string' ||
+    !req.remotePath.trim()
+  ) {
+    throw new Error('无效的同步请求')
+  }
+}
+
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
-  const getWebContents = () => getWindow()?.webContents ?? null
+  const getWebContents = () => {
+    const window = getWindow()
+    if (!window || window.isDestroyed()) return null
+    const contents = window.webContents
+    return contents.isDestroyed() ? null : contents
+  }
   const sessions = new SessionManager(getWebContents)
   const transfers = new TransferManager(getWebContents, sessions)
   const syncs = new RsyncManager(getWebContents, sessions)
+  sessions.onSessionClosed((sessionId) => transfers.handleSessionClosed(sessionId))
 
   let quitting = false
   app.on('before-quit', (event) => {
@@ -66,8 +143,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.localOpenInBrowser, (_event, target: string) =>
     localFs.openInFileBrowser(target)
   )
+  ipcMain.handle(IPC.localCleanTransientFiles, (_event, target: string) =>
+    localFs.cleanTransientFiles(target)
+  )
 
-  ipcMain.handle(IPC.sftpConnect, (_event, params: ConnectParams) => sessions.connect(params))
+  ipcMain.handle(IPC.sftpConnect, (_event, params: ConnectParams) => {
+    assertConnectParams(params)
+    return sessions.connect(params)
+  })
   ipcMain.handle(IPC.sftpConnectSite, async (_event, siteId: string) => {
     const record = await getSiteWithSecret(siteId)
     if (!record) throw new Error('站点不存在')
@@ -101,14 +184,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.sftpCheckKey, (_event, path: string, passphrase?: string) =>
     checkPrivateKey(path, passphrase)
   )
+  ipcMain.handle(IPC.sftpCleanTransientFiles, (_event, sessionId: string, target: string) =>
+    sessions.get(sessionId).cleanTransientFiles(target)
+  )
 
   ipcMain.handle(IPC.sitesList, () => listSites())
-  ipcMain.handle(IPC.sitesSave, (_event, input: SiteInput) => saveSite(input))
+  ipcMain.handle(IPC.sitesSave, (_event, input: SiteInput) => {
+    assertSiteInput(input)
+    return saveSite(input)
+  })
   ipcMain.handle(IPC.sitesDelete, (_event, id: string) => deleteSite(id))
   ipcMain.handle(IPC.sitesSecurity, () => ({ encryptionAvailable: encryptionAvailable() }))
   ipcMain.handle(IPC.sitesDataIssues, () => consumeDataIssues())
 
-  ipcMain.handle(IPC.transferStart, (_event, req: TransferStartRequest) => transfers.start(req))
+  ipcMain.handle(IPC.transferStart, (_event, req: TransferStartRequest) => {
+    assertTransferStartRequest(req)
+    return transfers.start(req)
+  })
   ipcMain.handle(IPC.transferCancel, (_event, id: string) => transfers.cancel(id))
   ipcMain.handle(IPC.transferPause, (_event, id: string) => transfers.pause(id))
   ipcMain.handle(IPC.transferResume, (_event, id: string) => transfers.resume(id))
@@ -117,10 +209,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   )
   ipcMain.handle(IPC.transferList, () => transfers.list())
   ipcMain.handle(IPC.transferListConflicts, () => transfers.pendingConflicts())
+  ipcMain.handle(IPC.transferClearFinished, () => transfers.clearFinished())
 
-  ipcMain.handle(IPC.syncStart, (_event, req: SyncStartRequest) => syncs.start(req))
+  ipcMain.handle(IPC.syncStart, (_event, req: SyncStartRequest) => {
+    assertSyncStartRequest(req)
+    return syncs.start(req)
+  })
   ipcMain.handle(IPC.syncCancel, (_event, id: string) => syncs.cancel(id))
   ipcMain.handle(IPC.syncGetLog, (_event, id: string) => syncs.getLog(id))
+  ipcMain.handle(IPC.syncClearFinished, () => syncs.clearFinished())
 
   ipcMain.handle(
     IPC.hostkeyRespond,

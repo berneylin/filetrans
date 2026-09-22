@@ -26,6 +26,7 @@ export interface FileTransApi {
     remove(paths: string[]): Promise<void>
     chmod(path: string, mode: number): Promise<void>
     openInBrowser(path: string): Promise<void>
+    cleanTransientFiles(path: string): Promise<number>
   }
   sftp: {
     connect(params: ConnectParams): Promise<SessionInfo>
@@ -38,6 +39,7 @@ export interface FileTransApi {
     remove(sessionId: string, paths: string[]): Promise<void>
     chmod(sessionId: string, path: string, mode: number): Promise<void>
     checkKey(path: string, passphrase?: string): Promise<KeyCheckResult>
+    cleanTransientFiles(sessionId: string, path: string): Promise<number>
   }
   sites: {
     list(): Promise<SiteConfig[]>
@@ -54,11 +56,13 @@ export interface FileTransApi {
     resolveConflict(id: string, resolution: ConflictResolution): Promise<void>
     list(): Promise<TransferGroup[]>
     listConflicts(): Promise<ConflictPrompt[]>
+    clearFinished(): Promise<void>
   }
   sync: {
     start(req: SyncStartRequest): Promise<string>
     cancel(id: string): Promise<void>
     getLog(id: string): Promise<string>
+    clearFinished(): Promise<void>
   }
   hostkey: {
     respond(promptId: string, accept: boolean, remember: boolean): Promise<void>

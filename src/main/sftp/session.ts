@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { Client, utils, type SFTPWrapper, type Stats } from 'ssh2'
 import type { ConnectParams, DirListing, EntryType, FileEntry, HostKeyInfo, KeyCheckResult } from '@shared/types'
 import { typeFromMode, assertPermissionMode } from '@shared/format'
-import { posixDirname, posixJoin, posixNormalize, posixParent, validateDirectoryPath, escapesParent } from '@shared/path'
+import { posixDirname, posixJoin, posixNormalize, posixParent, validateDirectoryPath, escapesParent, isTransientFile } from '@shared/path'
 import { validateName } from '../local/fs'
 import { replaceWithRollback } from '../replace'
 
@@ -140,8 +140,12 @@ export class SftpSession extends EventEmitter {
             .catch(() => callback(false))
         }) as never
       })
-      client.on('keyboard-interactive', (_name, _instructions, _lang, _prompts, finish) => {
-        finish([password ?? passphrase ?? ''])
+      client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
+        if (privateKeyPath || !password || prompts.length !== 1 || prompts[0].echo) {
+          finish([])
+          return
+        }
+        finish([password])
       })
     })
   }
@@ -193,16 +197,17 @@ export class SftpSession extends EventEmitter {
     }
     const entries: FileEntry[] = raw
       .filter((item) => item.filename !== '.' && item.filename !== '..')
+      .filter((item) => !isTransientFile(item.filename))
       .map((item) => {
         const type = typeFromMode(item.attrs.mode) as EntryType
         return {
           name: item.filename,
           path: posixJoin(resolved, item.filename),
           type,
-          size: item.attrs.size,
-          mtime: item.attrs.mtime * 1000,
-          atime: item.attrs.atime * 1000,
-          mode: item.attrs.mode,
+          size: item.attrs.size ?? 0,
+          mtime: (item.attrs.mtime ?? 0) * 1000,
+          atime: (item.attrs.atime ?? 0) * 1000,
+          mode: item.attrs.mode ?? 0,
           isSymlink: type === 'symlink'
         }
       })
@@ -221,14 +226,39 @@ export class SftpSession extends EventEmitter {
     return this.call((cb) => this.channel.realpath(target, cb))
   }
 
-  exec(command: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  exec(
+    command: string,
+    timeoutMs = 30000
+  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     const client = this.client
     if (!client || this.closed) return Promise.reject(new Error('SFTP 会话未连接'))
     return new Promise((resolve, reject) => {
+      let settled = false
+      const settleReject = (err: Error): void => {
+        if (settled) return
+        settled = true
+        reject(err)
+      }
+      const settleResolve = (result: { stdout: string; stderr: string; code: number | null }): void => {
+        if (settled) return
+        settled = true
+        resolve(result)
+      }
       client.exec(command, (err, stream) => {
         if (err) {
-          reject(err)
+          settleReject(err)
           return
+        }
+        const timer = setTimeout(() => {
+          settleReject(new Error(`远程命令执行超时 (${timeoutMs}ms): ${command}`))
+          try {
+            stream.destroy()
+          } catch {
+            /* 流已结束 */
+          }
+        }, timeoutMs)
+        const finish = (): void => {
+          clearTimeout(timer)
         }
         let stdout = ''
         let stderr = ''
@@ -238,9 +268,13 @@ export class SftpSession extends EventEmitter {
         stream.stderr.on('data', (chunk: Buffer) => {
           stderr += chunk.toString('utf8')
         })
-        stream.on('error', reject)
+        stream.on('error', (error: Error) => {
+          finish()
+          settleReject(error)
+        })
         stream.on('close', (code: number | null) => {
-          resolve({ stdout, stderr, code })
+          finish()
+          settleResolve({ stdout, stderr, code })
         })
       })
     })
@@ -350,6 +384,26 @@ export class SftpSession extends EventEmitter {
   async chmodEntry(target: string, mode: number): Promise<void> {
     assertPermissionMode(mode)
     await this.call((cb) => this.channel.chmod(target, mode, cb))
+  }
+
+  async cleanTransientFiles(target: string): Promise<number> {
+    const resolved = await this.resolvePath(target)
+    const raw = await this.call<RawDirEntry[]>((cb) => this.channel.readdir(resolved, cb))
+    let removed = 0
+    for (const item of raw) {
+      if (item.filename === '.' || item.filename === '..') continue
+      if (!isTransientFile(item.filename)) continue
+      const candidate = posixJoin(resolved, item.filename)
+      try {
+        const stats = await this.lstat(candidate)
+        if (typeFromMode(stats.mode) === 'directory') continue
+        await this.call((cb) => this.channel.unlink(candidate, cb))
+        removed++
+      } catch {
+        /* 单个清理失败不阻断 */
+      }
+    }
+    return removed
   }
 
   async utimes(target: string, atime: number, mtime: number): Promise<void> {
