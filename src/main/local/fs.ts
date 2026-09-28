@@ -38,7 +38,13 @@ export function validateName(name: string): string {
   return trimmed
 }
 
-function toEntry(fullPath: string, name: string, stats: Stats, type: EntryType): FileEntry {
+function toEntry(
+  fullPath: string,
+  name: string,
+  stats: Stats,
+  type: EntryType,
+  modeOverride?: number
+): FileEntry {
   return {
     name,
     path: fullPath,
@@ -46,7 +52,7 @@ function toEntry(fullPath: string, name: string, stats: Stats, type: EntryType):
     size: stats.size,
     mtime: stats.mtimeMs,
     atime: stats.atimeMs,
-    mode: stats.mode,
+    mode: modeOverride ?? stats.mode,
     isSymlink: stats.isSymbolicLink()
   }
 }
@@ -56,7 +62,15 @@ export function localHome(): string {
 }
 
 export async function listLocal(dirPath: string): Promise<DirListing> {
-  const resolved = path.resolve(dirPath)
+  const trimmed = dirPath.trim()
+  const expanded =
+    trimmed === '~' || trimmed.startsWith('~/')
+      ? path.join(homedir(), trimmed === '~' ? '' : trimmed.slice(2))
+      : trimmed
+  if (!path.isAbsolute(expanded)) {
+    throw new Error('本地目录必须是绝对路径')
+  }
+  const resolved = path.resolve(expanded)
   let dirents
   try {
     dirents = await fs.readdir(resolved, { withFileTypes: true })
@@ -75,15 +89,17 @@ export async function listLocal(dirPath: string): Promise<DirListing> {
             : dirent.isSymbolicLink()
               ? 'symlink'
               : 'other'
+        let modeOverride: number | undefined
         if (dirent.isSymbolicLink()) {
           try {
             const target = await fs.stat(full)
             type = target.isDirectory() ? 'directory' : target.isFile() ? 'file' : 'symlink'
+            modeOverride = target.mode
           } catch {
             type = 'symlink'
           }
         }
-        return toEntry(full, dirent.name, lstats, type)
+        return toEntry(full, dirent.name, lstats, type, modeOverride)
       } catch {
         return null
       }
@@ -134,6 +150,16 @@ export async function makeDir(parent: string, name: string): Promise<string> {
 export async function renameEntry(target: string, newName: string): Promise<string> {
   assertSafeTarget(target)
   const dest = path.join(path.dirname(target), validateName(newName))
+  let sourceStats: Stats
+  try {
+    sourceStats = await fs.lstat(target)
+  } catch (err) {
+    throw friendlyError(err, target)
+  }
+  const destStats = await fs.lstat(dest).catch(() => null)
+  if (destStats && !(destStats.dev === sourceStats.dev && destStats.ino === sourceStats.ino)) {
+    throw new Error(`已存在同名文件或目录: ${dest}`)
+  }
   try {
     await fs.rename(target, dest)
   } catch (err) {
@@ -173,10 +199,18 @@ const OPEN_BROWSER_TIMEOUT_MS = 5000
 
 export async function openInFileBrowser(target: string): Promise<void> {
   const resolved = path.resolve(target)
+  let stats: Stats
   try {
-    await fs.lstat(resolved)
+    stats = await fs.stat(resolved)
   } catch (err) {
     throw friendlyError(err, resolved)
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`只能在文件浏览器中打开目录: ${resolved}`)
+  }
+  if (process.platform === 'darwin' && /.\.[^.]+$/.test(path.basename(resolved))) {
+    shell.showItemInFolder(resolved)
+    return
   }
   let timer: NodeJS.Timeout | undefined
   try {

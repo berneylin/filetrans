@@ -20,11 +20,13 @@ export function PromptDialog() {
   if (!prompt) return null
 
   const submit = async (): Promise<void> => {
+    if (busy) return
+    const current = prompt
     setBusy(true)
     setError(null)
     try {
-      await prompt.onConfirm(value)
-      closePrompt()
+      await current.onConfirm(value)
+      if (useUi.getState().prompt === current) closePrompt()
     } catch (err) {
       setError(errorMessage(err))
       setBusy(false)
@@ -40,7 +42,7 @@ export function PromptDialog() {
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') void submit()
+          if (event.key === 'Enter' && !busy) void submit()
           if (event.key === 'Escape') closePrompt()
         }}
       />

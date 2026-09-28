@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { ConflictResolution, ConnectParams, SiteInput, SyncStartRequest, TransferStartRequest } from '@shared/types'
 import * as localFs from './local/fs'
@@ -31,20 +31,25 @@ function assertConnectParams(value: unknown): asserts value is ConnectParams {
 
 function assertSiteInput(value: unknown): asserts value is SiteInput {
   const input = assertObject(value, '无效的站点配置')
+  if (typeof input.name !== 'string' || !input.name.trim()) {
+    throw new Error('站点名称不能为空')
+  }
+  if (typeof input.host !== 'string' || !input.host.trim()) {
+    throw new Error('主机不能为空')
+  }
   if (
-    typeof input.name !== 'string' ||
-    !input.name.trim() ||
-    typeof input.host !== 'string' ||
-    !input.host.trim() ||
     typeof input.port !== 'number' ||
     !Number.isInteger(input.port) ||
     input.port < 1 ||
-    input.port > 65535 ||
-    typeof input.username !== 'string' ||
-    !input.username.trim() ||
-    (input.authType !== 'password' && input.authType !== 'key')
+    input.port > 65535
   ) {
-    throw new Error('无效的站点配置')
+    throw new Error('端口必须在 1-65535 之间')
+  }
+  if (typeof input.username !== 'string' || !input.username.trim()) {
+    throw new Error('用户名不能为空')
+  }
+  if (input.authType !== 'password' && input.authType !== 'key') {
+    throw new Error('无效的认证方式')
   }
 }
 
@@ -79,7 +84,11 @@ function assertSyncStartRequest(value: unknown): asserts value is SyncStartReque
   }
 }
 
-export function registerIpc(getWindow: () => BrowserWindow | null): void {
+export function registerIpc(getWindow: () => BrowserWindow | null): {
+  hasActiveWork: () => boolean
+  disconnectAll: () => Promise<void>
+  shutdown: () => Promise<void>
+} {
   const getWebContents = () => {
     const window = getWindow()
     if (!window || window.isDestroyed()) return null
@@ -90,23 +99,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   const transfers = new TransferManager(getWebContents, sessions)
   const syncs = new RsyncManager(getWebContents, sessions)
   sessions.onSessionClosed((sessionId) => transfers.handleSessionClosed(sessionId))
-
-  let quitting = false
-  app.on('before-quit', (event) => {
-    if (quitting) return
-    event.preventDefault()
-    quitting = true
-    transfers.cancelAll()
-    void (async () => {
-      try {
-        await syncs.killAll()
-        await sessions.disconnectAll()
-      } catch {
-        /* 退出清理失败不阻断退出 */
-      }
-      app.exit(0)
-    })()
-  })
 
   ipcMain.handle(IPC.appPickFile, async (_event, options?: { title?: string }) => {
     const win = getWindow()
@@ -143,9 +135,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.localOpenInBrowser, (_event, target: string) =>
     localFs.openInFileBrowser(target)
   )
-  ipcMain.handle(IPC.localCleanTransientFiles, (_event, target: string) =>
-    localFs.cleanTransientFiles(target)
-  )
+  ipcMain.handle(IPC.localCleanTransientFiles, (_event, target: string) => {
+    if (transfers.hasActiveTransferUnder(target, 'local')) {
+      throw new Error('该目录有进行中的传输，暂不能清理临时文件')
+    }
+    return localFs.cleanTransientFiles(target)
+  })
 
   ipcMain.handle(IPC.sftpConnect, (_event, params: ConnectParams) => {
     assertConnectParams(params)
@@ -155,13 +150,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const record = await getSiteWithSecret(siteId)
     if (!record) throw new Error('站点不存在')
     const { site, secret } = record
+    const useKey = site.authType === 'key'
     return sessions.connect({
       host: site.host,
       port: site.port,
       username: site.username,
-      password: secret.password,
-      privateKeyPath: site.authType === 'key' ? site.keyPath : undefined,
-      passphrase: secret.passphrase
+      password: useKey ? undefined : secret.password,
+      privateKeyPath: useKey ? site.keyPath : undefined,
+      passphrase: useKey ? secret.passphrase : undefined
     })
   })
   ipcMain.handle(IPC.sftpDisconnect, (_event, sessionId: string) => sessions.disconnect(sessionId))
@@ -184,9 +180,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.sftpCheckKey, (_event, path: string, passphrase?: string) =>
     checkPrivateKey(path, passphrase)
   )
-  ipcMain.handle(IPC.sftpCleanTransientFiles, (_event, sessionId: string, target: string) =>
-    sessions.get(sessionId).cleanTransientFiles(target)
-  )
+  ipcMain.handle(IPC.sftpCleanTransientFiles, (_event, sessionId: string, target: string) => {
+    if (transfers.hasActiveTransferUnder(target, 'remote')) {
+      throw new Error('该目录有进行中的传输，暂不能清理临时文件')
+    }
+    return sessions.get(sessionId).cleanTransientFiles(target)
+  })
 
   ipcMain.handle(IPC.sitesList, () => listSites())
   ipcMain.handle(IPC.sitesSave, (_event, input: SiteInput) => {
@@ -224,4 +223,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     (_event, promptId: string, accept: boolean, remember: boolean) =>
       sessions.respondHostKey(promptId, accept, remember)
   )
+
+  return {
+    hasActiveWork: () =>
+      transfers
+        .list()
+        .some(
+          (group) =>
+            group.status === 'active' || group.status === 'pending' || group.status === 'paused'
+        ) || syncs.hasRunning(),
+    disconnectAll: () => sessions.disconnectAll(),
+    shutdown: async () => {
+      transfers.cancelAll()
+      try {
+        await syncs.killAll()
+        await sessions.disconnectAll()
+      } catch {
+        /* 清理失败不阻断退出 */
+      }
+    }
+  }
 }

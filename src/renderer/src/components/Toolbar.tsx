@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import { useSites } from '../stores/sites'
 import { useTabs } from '../stores/tabs'
 import { useUi } from '../stores/ui'
+import { errorMessage } from '../utils/errors'
 import { btn, btnPrimary, input } from '../utils/styles'
 
 export function Toolbar() {
@@ -12,12 +13,22 @@ export function Toolbar() {
   const setSyncDialogOpen = useUi((state) => state.setSyncDialogOpen)
   const [selectedSite, setSelectedSite] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (selectedSite && !sites.some((site) => site.id === selectedSite)) {
+      setSelectedSite('')
+    }
+  }, [sites, selectedSite])
 
   const handleConnect = async (): Promise<void> => {
     if (!selectedSite) return
     setBusy(true)
+    setError(null)
     try {
       await openSite(selectedSite)
+    } catch (err) {
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -52,6 +63,7 @@ export function Toolbar() {
         <ArrowLeftRight size={12} className="mr-1 inline" />
         同步…
       </button>
+      {error && <span className="truncate text-red-600">{error}</span>}
     </div>
   )
 }

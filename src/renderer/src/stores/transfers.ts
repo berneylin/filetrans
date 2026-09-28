@@ -25,7 +25,7 @@ interface TransfersStore {
   onUpdate: (group: TransferGroup) => void
   onConflict: (prompt: ConflictPrompt) => void
   onConflictExpired: (transferId: string) => void
-  resolveConflict: (resolution: ConflictResolution) => Promise<void>
+  resolveConflict: (transferId: string, resolution: ConflictResolution) => Promise<void>
   clearFinished: () => void
   setError: (message: string | null) => void
 }
@@ -106,7 +106,18 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
       const groups = exists
         ? state.groups.map((g) => (g.id === group.id ? group : g))
         : [...state.groups, group]
-      return { groups }
+      const finished = groups
+        .filter(
+          (g) => g.status === 'done' || g.status === 'error' || g.status === 'cancelled'
+        )
+        .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))
+      let trimmed = groups
+      while (finished.length > 50) {
+        const oldest = finished.shift()
+        if (!oldest) break
+        trimmed = trimmed.filter((g) => g.id !== oldest.id)
+      }
+      return { groups: trimmed }
     })
   },
 
@@ -122,12 +133,14 @@ export const useTransfers = create<TransfersStore>((set, get) => ({
       conflicts: state.conflicts.filter((item) => item.transferId !== transferId)
     })),
 
-  resolveConflict: async (resolution) => {
-    const [prompt, ...rest] = get().conflicts
+  resolveConflict: async (transferId, resolution) => {
+    const prompt = get().conflicts.find((item) => item.transferId === transferId)
     if (!prompt) return
-    set({ conflicts: rest })
+    set((state) => ({
+      conflicts: state.conflicts.filter((item) => item.transferId !== transferId)
+    }))
     try {
-      await window.api.transfers.resolveConflict(prompt.transferId, resolution)
+      await window.api.transfers.resolveConflict(transferId, resolution)
     } catch {
       /* 忽略响应失败 */
     }

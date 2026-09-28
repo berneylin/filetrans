@@ -78,6 +78,13 @@ export function escapesParent(parent: string, name: string): boolean {
   return resolved !== parentNormalized && !resolved.startsWith(prefix)
 }
 
+export function isWithin(root: string, target: string): boolean {
+  const rel = posixRelative(root, target)
+  if (rel === '.') return true
+  if (rel === '..' || rel.startsWith('../') || rel.startsWith('/')) return false
+  return rel !== ''
+}
+
 export function findBannedDir(candidate: string, banned: readonly string[]): string | null {
   const normalized = posixNormalize(candidate.trim())
   for (const entry of banned) {
@@ -89,11 +96,14 @@ export function findBannedDir(candidate: string, banned: readonly string[]): str
 }
 
 const BACKUP_SUFFIX_RE = /\.filetrans-backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const SHORT_PART_RE = /^\.ft-[0-9a-f]{16}\.filetrans-part(\.json)?$/
 
 export function isTransientFile(name: string): boolean {
   return (
     name.endsWith('.filetrans-part') ||
     name.endsWith('.filetrans-part.json') ||
+    (name.endsWith('.tmp') && name.includes('.filetrans-part.json.')) ||
+    SHORT_PART_RE.test(name) ||
     BACKUP_SUFFIX_RE.test(name)
   )
 }

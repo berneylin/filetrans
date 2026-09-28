@@ -43,11 +43,11 @@ export function modeToOctal(mode: number): string {
 }
 
 export function octalToMode(octal: string): number {
-  const parsed = Number.parseInt(octal.trim(), 8)
-  if (Number.isNaN(parsed) || parsed < 0 || parsed > 0o7777) {
+  const trimmed = octal.trim()
+  if (!/^[0-7]{3,4}$/.test(trimmed)) {
     throw new Error(`无效的权限值: ${octal}`)
   }
-  return parsed
+  return Number.parseInt(trimmed, 8)
 }
 
 export function assertPermissionMode(mode: number): number {
@@ -87,16 +87,20 @@ export function bitsToMode(bits: PermissionBits): number {
 }
 
 export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes)) return '-'
   if (bytes < 1024) return `${bytes} B`
   const units = ['KB', 'MB', 'GB', 'TB', 'PB']
-  let value = bytes
-  let unit = 'B'
-  for (const u of units) {
-    value /= 1024
-    unit = u
-    if (value < 1024) break
+  let value = bytes / 1024
+  let index = 0
+  for (;;) {
+    const shown = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10
+    if (shown >= 1024 && index < units.length - 1) {
+      value /= 1024
+      index++
+      continue
+    }
+    return `${shown.toFixed(shown >= 100 ? 0 : 1)} ${units[index]}`
   }
-  return `${value.toFixed(value >= 100 ? 0 : 1)} ${unit}`
 }
 
 function pad(n: number): string {
@@ -120,7 +124,7 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatSpeed(bytesPerSecond: number): string {
-  if (bytesPerSecond <= 0) return ''
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return ''
   return `${formatSize(bytesPerSecond)}/s`
 }
 

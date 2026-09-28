@@ -4,11 +4,14 @@ import type { SyncJob } from '@shared/types'
 interface SyncStore {
   jobs: SyncJob[]
   onUpdate: (job: SyncJob) => void
+  onSuccess: (id: string, callback: () => void) => void
   cancel: (id: string) => Promise<void>
   clearFinished: () => void
 }
 
-export const useSync = create<SyncStore>((set) => ({
+const successCallbacks = new Map<string, () => void>()
+
+export const useSync = create<SyncStore>((set, get) => ({
   jobs: [],
 
   onUpdate: (job) => {
@@ -19,6 +22,20 @@ export const useSync = create<SyncStore>((set) => ({
         : [...state.jobs, job]
       return { jobs }
     })
+    if (job.status !== 'running') {
+      const callback = successCallbacks.get(job.id)
+      successCallbacks.delete(job.id)
+      if (callback && job.status === 'done') callback()
+    }
+  },
+
+  onSuccess: (id, callback) => {
+    const job = get().jobs.find((item) => item.id === id)
+    if (!job || job.status === 'running') {
+      successCallbacks.set(id, callback)
+      return
+    }
+    if (job.status === 'done') callback()
   },
 
   cancel: async (id) => {

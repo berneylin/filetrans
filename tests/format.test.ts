@@ -54,6 +54,14 @@ describe('权限转换', () => {
     expect(() => octalToMode('999')).toThrow()
     expect(() => octalToMode('abc')).toThrow()
   })
+  it('octalToMode 严格拒绝数字前缀与超长输入', () => {
+    expect(() => octalToMode('785')).toThrow('无效的权限值')
+    expect(() => octalToMode('644abc')).toThrow('无效的权限值')
+    expect(() => octalToMode('64')).toThrow('无效的权限值')
+    expect(() => octalToMode('07777')).toThrow('无效的权限值')
+    expect(octalToMode('0755')).toBe(0o755)
+    expect(octalToMode('4755')).toBe(0o4755)
+  })
   it('bits 与 mode 互相转换', () => {
     const bits = modeToBits(0o640)
     expect(bits.owner.read).toBe(true)

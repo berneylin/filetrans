@@ -1,7 +1,9 @@
 import type { FileEntry } from '@shared/types'
 import {
+  currentTabId,
   paneNavigate,
   paneRefresh,
+  paneRefreshTab,
   paneRemoteSessionId,
   paneSelectedEntries,
   readPane
@@ -17,6 +19,10 @@ function requireSession(): string {
   return sessionId
 }
 
+function refreshOrigin(side: PaneSide, tabId: string | null): Promise<void> {
+  return paneRefreshTab(side, tabId)
+}
+
 export function refreshPane(side: PaneSide): Promise<void> {
   return paneRefresh(side)
 }
@@ -30,7 +36,7 @@ export function promptMakeDirectory(side: PaneSide): void {
     onConfirm: async (name) => {
       if (side === 'local') await window.api.local.mkdir(pane.path, name)
       else await window.api.sftp.mkdir(requireSession(), pane.path, name)
-      await paneRefresh(side)
+      await refreshOrigin(side, currentTabId())
     }
   })
 }
@@ -52,11 +58,12 @@ export async function commitRename(target: string, newName: string, side: PaneSi
     finishRename()
     return
   }
+  const tabId = currentTabId()
   try {
     if (side === 'local') await window.api.local.rename(target, trimmed)
     else await window.api.sftp.rename(requireSession(), target, trimmed)
     finishRename()
-    await paneRefresh(side)
+    await refreshOrigin(side, tabId)
   } catch (err) {
     finishRename()
     window.alert(errorMessage(err))
@@ -68,13 +75,15 @@ export async function deleteSelection(side: PaneSide, entries?: FileEntry[]): Pr
   if (list.length === 0) return
   const label = list.length === 1 ? `“${list[0].name}”` : `${list.length} 个项目`
   if (!window.confirm(`确定要删除 ${label} 吗？此操作不可恢复。`)) return
+  const tabId = currentTabId()
   try {
     const paths = list.map((entry) => entry.path)
     if (side === 'local') await window.api.local.remove(paths)
     else await window.api.sftp.remove(requireSession(), paths)
-    await paneRefresh(side)
   } catch (err) {
     window.alert(errorMessage(err))
+  } finally {
+    await refreshOrigin(side, tabId)
   }
 }
 
@@ -85,15 +94,19 @@ export function promptChmod(side: PaneSide, entries?: FileEntry[]): void {
 }
 
 export async function applyChmod(target: ChmodTarget, mode: number): Promise<void> {
-  if (target.side === 'local') {
-    for (const entry of target.entries) await window.api.local.chmod(entry.path, mode)
-  } else {
-    const sessionId = requireSession()
-    for (const entry of target.entries) {
-      await window.api.sftp.chmod(sessionId, entry.path, mode)
+  const tabId = currentTabId()
+  try {
+    if (target.side === 'local') {
+      for (const entry of target.entries) await window.api.local.chmod(entry.path, mode)
+    } else {
+      const sessionId = requireSession()
+      for (const entry of target.entries) {
+        await window.api.sftp.chmod(sessionId, entry.path, mode)
+      }
     }
+  } finally {
+    await refreshOrigin(target.side, tabId)
   }
-  await paneRefresh(target.side)
 }
 
 export async function openInFileBrowser(target: string): Promise<void> {

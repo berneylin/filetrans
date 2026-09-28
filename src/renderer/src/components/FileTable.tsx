@@ -100,13 +100,16 @@ function RenameInput({
   side: PaneSide
 }) {
   const [value, setValue] = useState(initial)
+  const committingRef = useRef(false)
 
   const commit = (): void => {
+    if (committingRef.current) return
     const trimmed = value.trim()
     if (!trimmed || trimmed.includes('/') || trimmed === initial) {
       finishRename()
       return
     }
+    committingRef.current = true
     void commitRename(target, trimmed, side)
   }
 
@@ -144,6 +147,25 @@ export function FileTable({ side }: { side: PaneSide }) {
   const typeAheadRef = useRef({ buffer: '', at: 0 })
   const resizeRef = useRef<{ key: ColumnKey; startX: number; startWidth: number } | null>(null)
   const [available, setAvailable] = useState(0)
+
+  const selectedSet = useMemo(() => new Set(pane.selected), [pane.selected])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+    anchorRef.current = null
+    typeAheadRef.current = { buffer: '', at: 0 }
+  }, [pane.path])
+
+  useEffect(() => {
+    const styles = {
+      cursor: document.body.style.cursor,
+      userSelect: document.body.style.userSelect
+    }
+    return () => {
+      document.body.style.cursor = styles.cursor
+      document.body.style.userSelect = styles.userSelect
+    }
+  }, [])
 
   const measureAvailable = useCallback((): void => {
     const width = scrollRef.current?.clientWidth ?? 0
@@ -216,6 +238,13 @@ export function FileTable({ side }: { side: PaneSide }) {
     overscan: 15
   })
 
+  useEffect(() => {
+    if (!renaming || renaming.side !== side) return
+    const index = rows.findIndex((entry) => entry.path === renaming.path)
+    if (index >= 0) virtualizer.scrollToIndex(index, { align: 'auto' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renaming?.side, renaming?.path, side])
+
   const onRowClick = (event: MouseEvent, index: number): void => {
     const entry = rows[index]
     scrollRef.current?.focus()
@@ -280,7 +309,7 @@ export function FileTable({ side }: { side: PaneSide }) {
     if (event.key === 'Enter') {
       event.preventDefault()
       event.stopPropagation()
-      const selected = entries.filter((entry) => pane.selected.includes(entry.name))
+      const selected = entries.filter((entry) => selectedSet.has(entry.name))
       if (selected.length === 1) activateEntry(side, selected[0])
       return
     }
@@ -396,7 +425,7 @@ export function FileTable({ side }: { side: PaneSide }) {
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const entry = rows[virtualRow.index]
               const isParent = entry.name === '..'
-              const isSelected = !isParent && pane.selected.includes(entry.name)
+              const isSelected = !isParent && selectedSet.has(entry.name)
               const isRenaming =
                 !isParent &&
                 renaming !== null &&
@@ -426,7 +455,7 @@ export function FileTable({ side }: { side: PaneSide }) {
                   onContextMenu={(event) => {
                     event.preventDefault()
                     if (isParent) return
-                    if (!pane.selected.includes(entry.name)) {
+                    if (!selectedSet.has(entry.name)) {
                       paneSetSelected(side, [entry.name])
                     }
                     openContextMenu(side, entry, event.clientX, event.clientY)
@@ -436,10 +465,8 @@ export function FileTable({ side }: { side: PaneSide }) {
                       event.preventDefault()
                       return
                     }
-                    const names = pane.selected.includes(entry.name)
-                      ? pane.selected
-                      : [entry.name]
-                    if (!pane.selected.includes(entry.name)) {
+                    const names = selectedSet.has(entry.name) ? pane.selected : [entry.name]
+                    if (!selectedSet.has(entry.name)) {
                       paneSetSelected(side, [entry.name])
                     }
                     const paths = names

@@ -20,9 +20,8 @@ if [ -n "${DISPLAY:-}" ] && [ "${FILETRANS_OZONE:-}" != "wayland" ]; then
   ARGS+=(--ozone-platform=x11)
 fi
 SANDBOX_OWNER="$(stat -c '%u' "$UNPACKED/chrome-sandbox" 2>/dev/null || echo none)"
-SANDBOX_MODE="$(stat -c '%a' "$UNPACKED/chrome-sandbox" 2>/dev/null || echo 0)"
-if [ "$SANDBOX_OWNER" != "0" ] || [ "${SANDBOX_MODE:0:1}" != "4" ]; then
+if [ "$SANDBOX_OWNER" != "0" ] || [ ! -u "$UNPACKED/chrome-sandbox" ]; then
   ARGS+=(--no-sandbox)
 fi
 
-exec "$BIN" "${ARGS[@]}" "$@"
+exec "$BIN" ${ARGS[@]+"${ARGS[@]}"} "$@"

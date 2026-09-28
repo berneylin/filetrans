@@ -5,6 +5,7 @@ import { errorMessage } from '../utils/errors'
 import { btn, btnPrimary, dialogInput } from '../utils/styles'
 import { paneRemoteSessionId, paneSelectedEntries, readPane } from '../pane'
 import { useSettings } from '../stores/settings'
+import { useSync } from '../stores/sync'
 import { useTabs } from '../stores/tabs'
 import { useUi } from '../stores/ui'
 import { parseBannedDirs, pickSyncPath } from '../utils/sync'
@@ -29,7 +30,7 @@ export function SyncDialog() {
   const [localPath, setLocalPath] = useState('')
   const [remotePath, setRemotePath] = useState('')
   const [exclude, setExclude] = useState(useSettings.getState().syncExclude)
-  const [deleteExtraneous, setDeleteExtraneous] = useState(useSettings.getState().syncDelete)
+  const [deleteExtraneous, setDeleteExtraneous] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [initialized, setInitialized] = useState(false)
@@ -37,6 +38,7 @@ export function SyncDialog() {
   if (open && !initialized) {
     setLocalPath(prefillPane('local'))
     setRemotePath(prefillPane('remote'))
+    setDeleteExtraneous(false)
     setError(null)
     setBusy(false)
     setInitialized(true)
@@ -90,16 +92,14 @@ export function SyncDialog() {
     setBusy(true)
     setError(null)
     try {
-      useSettings.getState().update({
-        syncExclude: exclude,
-        syncDelete: deleteExtraneous,
-        syncCompress: useSettings.getState().syncCompress
-      })
-      await window.api.sync.start({
+      useSettings.getState().update({ syncExclude: exclude })
+      const local = localPath.trim()
+      const remote = remotePath.trim()
+      const id = await window.api.sync.start({
         sessionId,
         direction,
-        localPath: localPath.trim(),
-        remotePath: remotePath.trim(),
+        localPath: local,
+        remotePath: remote,
         bannedDirs,
         options: {
           deleteExtraneous,
@@ -110,7 +110,9 @@ export function SyncDialog() {
           compress: useSettings.getState().syncCompress
         }
       })
-      useSettings.getState().rememberSyncPaths(localPath.trim(), remotePath.trim(), siteId)
+      useSync
+        .getState()
+        .onSuccess(id, () => useSettings.getState().rememberSyncPaths(local, remote, siteId))
       setOpen(false)
     } catch (err) {
       setError(errorMessage(err))

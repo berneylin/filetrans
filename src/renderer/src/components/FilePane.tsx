@@ -152,11 +152,15 @@ export function FilePane({ side }: { side: PaneSide }) {
       }
       return
     }
-    if (side === 'remote' && event.dataTransfer.files.length > 0) {
-      const paths = Array.from(event.dataTransfer.files)
-        .map((file) => window.api.getPathForFile(file))
-        .filter(Boolean)
-      transferPaths('local', paths)
+    if (event.dataTransfer.files.length > 0) {
+      if (side === 'remote') {
+        const paths = Array.from(event.dataTransfer.files)
+          .map((file) => window.api.getPathForFile(file))
+          .filter(Boolean)
+        transferPaths('local', paths)
+      } else {
+        window.alert('暂不支持把系统文件拖入本地面板，请拖到远程面板上传')
+      }
     }
   }
 
@@ -176,6 +180,8 @@ export function FilePane({ side }: { side: PaneSide }) {
       className="flex min-w-0 flex-1 flex-col"
       onDragOver={(event) => {
         if (disabled) return
+        const internal = event.dataTransfer.types.includes('application/x-filetrans')
+        if (!internal && side === 'local') return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'copy'
       }}

@@ -4,14 +4,12 @@ import type { TransferOptions } from '@shared/types'
 
 interface SettingsStore extends TransferOptions {
   syncExclude: string
-  syncDelete: boolean
   syncCompress: boolean
   syncBannedPaths: string
   syncLastLocal: string
   syncLastRemote: Record<string, string>
   update: (patch: Partial<TransferOptions> & Partial<{
     syncExclude: string
-    syncDelete: boolean
     syncCompress: boolean
     syncBannedPaths: string
   }>) => void
@@ -28,7 +26,6 @@ export const useSettings = create<SettingsStore>()(
       preserveTimestamps: true,
       preservePermissions: true,
       syncExclude: '.venv*',
-      syncDelete: false,
       syncCompress: true,
       syncBannedPaths: '',
       syncLastLocal: '',

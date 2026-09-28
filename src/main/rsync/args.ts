@@ -21,8 +21,14 @@ export function withTrailingSlash(p: string): string {
 }
 
 const SAFE_REMOTE_PATH = /^[A-Za-z0-9._/@%+,:=-]+$/
+const WILDCARD_RE = /[*?[\]]/
+const WILDCARD_GLOBAL_RE = /[*?[\]]/g
 
-function formatRemotePath(path: string, quote: boolean): string {
+function escapeWildcards(path: string): string {
+  return path.replace(WILDCARD_GLOBAL_RE, (ch) => `\\${ch}`)
+}
+
+function quoteRemotePath(path: string, quote: boolean): string {
   if (!quote || SAFE_REMOTE_PATH.test(path)) return path
   return `'${path.replace(/'/g, `'\\''`)}'`
 }
@@ -31,11 +37,12 @@ export function buildRsyncArgs(t: RsyncTargetOptions): string[] {
   const gnu = t.modernGnu ?? true
   const progress2 = gnu && (t.progress2 ?? false)
   const quote = !progress2 && !(t.argProtected ?? false)
+  let forceQuote = false
   const args = gnu
     ? [
         '-a',
         ...(progress2 ? ['-s'] : []),
-        '--partial',
+        '--partial-dir=.filetrans-rsync-partial',
         '--no-owner',
         '--no-group',
         progress2 ? '--info=progress2,name' : '--progress'
@@ -48,13 +55,25 @@ export function buildRsyncArgs(t: RsyncTargetOptions): string[] {
   if (t.deleteExtraneous) args.push('--delete')
   if (t.compress) args.push(gnu && t.zstd ? '--zc=zstd' : '-z')
   args.push('-e', t.rsh)
+  const hasWildcard = WILDCARD_RE.test(t.remotePath)
+  let remotePath = t.remotePath
+  if (progress2) {
+    if (hasWildcard && t.direction === 'download') {
+      remotePath = escapeWildcards(remotePath)
+    }
+  } else if (hasWildcard && (t.argProtected ?? false)) {
+    args.push('--old-args')
+    forceQuote = true
+  }
+  const useQuote = quote || forceQuote
   args.push('--')
   const local = withTrailingSlash(t.localPath)
-  const remote = `${t.user}@${t.host}:`
+  const hostLiteral = t.host.includes(':') ? `[${t.host}]` : t.host
+  const remote = `${t.user}@${hostLiteral}:`
   if (t.direction === 'upload') {
-    args.push(local, `${remote}${formatRemotePath(t.remotePath, quote)}`)
+    args.push(local, `${remote}${quoteRemotePath(remotePath, useQuote)}`)
   } else {
-    args.push(`${remote}${formatRemotePath(withTrailingSlash(t.remotePath), quote)}`, local)
+    args.push(`${remote}${quoteRemotePath(withTrailingSlash(remotePath), useQuote)}`, local)
   }
   return args
 }
@@ -84,10 +103,15 @@ export function buildSshConfig(opts: SshConfigOptions): string {
     '  GlobalKnownHostsFile /dev/null',
     '  IdentityAgent none',
     '  NumberOfPasswordPrompts 1',
+    '  ServerAliveInterval 15',
+    '  ServerAliveCountMax 3',
     `  ConnectTimeout ${opts.connectTimeout ?? 20}`
   ]
   if (opts.keyPath) {
+    lines.push('  PreferredAuthentications publickey')
     lines.push(`  IdentityFile ${quoteConfigValue(opts.keyPath)}`, '  IdentitiesOnly yes')
+  } else {
+    lines.push('  PubkeyAuthentication no')
   }
   return `${lines.join('\n')}\n`
 }

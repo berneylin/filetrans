@@ -41,6 +41,25 @@ describe('parseProgressLine', () => {
     expect(progress?.totalChecks).toBe(1025)
   })
 
+  it('兼容旧版 rsync 的 xfer# 与 to-check 格式', () => {
+    const progress = parseProgressLine(
+      '        928 100%    0.91kB/s    0:00:00 (xfer#1, to-check=3/5)',
+      'gnu'
+    )
+    expect(progress).not.toBe(null)
+    expect(progress?.bytes).toBe(928)
+    expect(progress?.percent).toBe(100)
+    expect(progress?.transferredFiles).toBe(1)
+    expect(progress?.toCheck).toBe(3)
+    expect(progress?.totalChecks).toBe(5)
+  })
+
+  it('兼容剩余时间未知的 ??:??:??', () => {
+    const progress = parseProgressLine('     32,768   0%    0.00kB/s    ??:??:?? (xfr#0, to-chk=4/4)')
+    expect(progress).not.toBe(null)
+    expect(progress?.toCheck).toBe(4)
+  })
+
   it('百分比 100% 与最终 to-chk=0', () => {
     const progress = parseProgressLine(
       '     44,040,198 100%    1.52GB/s    0:00:00 (xfr#3, to-chk=0/5)'

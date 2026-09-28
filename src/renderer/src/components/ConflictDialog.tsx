@@ -6,26 +6,40 @@ import { btn, btnPrimary } from '../utils/styles'
 import { Modal } from './Modal'
 
 const MAX_ITEMS = 8
+const CONFIRM_LOCK_MS = 300
 
 export function ConflictDialog() {
   const conflicts = useTransfers((state) => state.conflicts)
+  const groups = useTransfers((state) => state.groups)
   const resolveConflict = useTransfers((state) => state.resolveConflict)
   const resumeEnabled = useSettings((state) => state.resume)
   const [resolution, setResolution] = useState<Exclude<ConflictResolution, 'cancel'>>(
-    resumeEnabled ? 'resume' : 'overwrite'
+    resumeEnabled ? 'resume' : 'skip'
   )
+  const [locked, setLocked] = useState(true)
   const conflict = conflicts[0] ?? null
+  const transferId = conflict?.transferId ?? null
 
   useEffect(() => {
-    setResolution(resumeEnabled ? 'resume' : 'overwrite')
-  }, [conflict, resumeEnabled])
+    setResolution(resumeEnabled ? 'resume' : 'skip')
+  }, [transferId, resumeEnabled])
+
+  useEffect(() => {
+    if (!transferId) return
+    setLocked(true)
+    const timer = setTimeout(() => setLocked(false), CONFIRM_LOCK_MS)
+    return () => clearTimeout(timer)
+  }, [transferId])
 
   if (!conflict) return null
+
+  const direction = groups.find((group) => group.id === conflict.transferId)?.direction
+  const overwriteTarget = direction === 'download' ? '本地' : '远程'
 
   return (
     <Modal
       title="目标文件已存在"
-      onClose={() => void resolveConflict('cancel')}
+      onClose={() => void resolveConflict(conflict.transferId, 'cancel')}
       width={560}
       dismissible={false}
     >
@@ -37,7 +51,13 @@ export function ConflictDialog() {
         {conflict.items.slice(0, MAX_ITEMS).map((item) => (
           <div key={item.targetPath} className="truncate" title={item.targetPath}>
             <span className="mr-1 text-gray-500">
-              {item.type === 'directory' ? '[目录]' : item.type === 'symlink' ? '[链接]' : '[文件]'}
+              {item.partial
+                ? '[未完成]'
+                : item.type === 'directory'
+                  ? '[目录]'
+                  : item.type === 'symlink'
+                    ? '[链接]'
+                    : '[文件]'}
             </span>
             {item.targetPath}
           </div>
@@ -48,7 +68,7 @@ export function ConflictDialog() {
       </div>
       {resolution === 'overwrite' && conflict.items.some((item) => item.type === 'directory') && (
         <div className="mt-2 text-[12px] text-red-600">
-          覆盖将递归删除远程同名目录及其全部内容，请确认。
+          覆盖将递归删除{overwriteTarget}同名目录及其全部内容，请确认。
         </div>
       )}
       <div className="mt-3 space-y-1">
@@ -80,10 +100,17 @@ export function ConflictDialog() {
         </label>
       </div>
       <div className="mt-4 flex justify-end gap-2">
-        <button className={btn} onClick={() => void resolveConflict('cancel')}>
+        <button
+          className={btn}
+          onClick={() => void resolveConflict(conflict.transferId, 'cancel')}
+        >
           取消传输
         </button>
-        <button className={btnPrimary} onClick={() => void resolveConflict(resolution)}>
+        <button
+          className={btnPrimary}
+          disabled={locked}
+          onClick={() => void resolveConflict(conflict.transferId, resolution)}
+        >
           确定
         </button>
       </div>

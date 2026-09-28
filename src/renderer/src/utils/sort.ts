@@ -1,6 +1,8 @@
 import type { FileEntry } from '@shared/types'
 import type { SortKey } from '../types'
 
+const collator = new Intl.Collator('zh-CN', { numeric: true })
+
 export function sortEntries(entries: FileEntry[], sortKey: SortKey, sortAsc: boolean): FileEntry[] {
   const direction = sortAsc ? 1 : -1
   return [...entries].sort((a, b) => {
@@ -9,13 +11,13 @@ export function sortEntries(entries: FileEntry[], sortKey: SortKey, sortAsc: boo
     let result = 0
     switch (sortKey) {
       case 'name':
-        result = a.name.localeCompare(b.name, 'zh-CN')
+        result = collator.compare(a.name, b.name)
         break
       case 'size':
         result = a.size - b.size
         break
       case 'type':
-        result = a.type.localeCompare(b.type)
+        result = collator.compare(a.type, b.type)
         break
       case 'mtime':
         result = a.mtime - b.mtime
@@ -24,7 +26,7 @@ export function sortEntries(entries: FileEntry[], sortKey: SortKey, sortAsc: boo
         result = a.mode - b.mode
         break
     }
-    if (result === 0) result = a.name.localeCompare(b.name, 'zh-CN')
+    if (result === 0) result = collator.compare(a.name, b.name)
     return result * direction
   })
 }

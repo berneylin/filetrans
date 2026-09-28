@@ -262,4 +262,47 @@ describe('标签导航竞态与历史', () => {
     expect(tab?.path).toBe('/data')
     expect(tab?.back).toEqual(['/home/test'])
   })
+
+  it('关闭标签确认取消后在途加载完成时恢复正常', async () => {
+    const release: { resolve: () => void } = { resolve: () => undefined }
+    const list = vi.fn(async (_s: string, target: string) => {
+      if (target === '/slow') {
+        await new Promise<void>((resolve) => {
+          release.resolve = resolve
+        })
+      }
+      return { path: target, parent: '/', entries: [] }
+    })
+    const api = {
+      sftp: {
+        connectSite: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        connect: vi.fn(async () => ({ sessionId: 's1', host: 'h', port: 22, username: 'u' })),
+        disconnect: vi.fn(async () => undefined),
+        home: vi.fn(async () => '/home/test'),
+        list
+      },
+      sites: { list: vi.fn(async () => [makeSite()]) }
+    }
+    installWindow(api)
+    const { useSites } = await import('../../src/renderer/src/stores/sites')
+    const { useTabs } = await import('../../src/renderer/src/stores/tabs')
+    const { useTransfers } = await import('../../src/renderer/src/stores/transfers')
+    await useSites.getState().loadSites()
+    await useTabs.getState().openSite('site-1')
+    const id = useTabs.getState().activeTab()?.id ?? ''
+
+    const pending = useTabs.getState().navigate(id, '/slow')
+    useTransfers.setState({
+      groups: [{ id: 'g1', sessionId: 's1', status: 'active' } as never]
+    })
+    ;(globalThis as unknown as { window: Record<string, unknown> }).window.confirm = () => false
+
+    await useTabs.getState().closeTab(id)
+    expect(useTabs.getState().tabs.some((tab) => tab.id === id)).toBe(true)
+    expect(api.sftp.disconnect).not.toHaveBeenCalled()
+
+    release.resolve()
+    await pending
+    expect(useTabs.getState().activeTab()?.loading).toBe(false)
+  })
 })

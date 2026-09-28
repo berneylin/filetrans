@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -359,6 +359,9 @@ export function TransferPanel() {
   const syncJobs = useSync((state) => state.jobs)
   const clearSyncFinished = useSync((state) => state.clearFinished)
   const setError = useTransfers((state) => state.setError)
+  const onPauseGroup = useCallback((id: string) => void pause(id), [pause])
+  const onResumeGroup = useCallback((id: string) => void resume(id), [resume])
+  const onCancelGroup = useCallback((id: string) => void cancel(id), [cancel])
   const [open, setOpen] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [height, setHeight] = useState(() => {
@@ -379,6 +382,7 @@ export function TransferPanel() {
       if (!dragRef.current) return
       dragRef.current = null
       document.body.style.cursor = ''
+      document.body.style.userSelect = ''
       localStorage.setItem(HEIGHT_STORAGE_KEY, String(heightRef.current))
     }
     window.addEventListener('mousemove', onMove)
@@ -386,6 +390,8 @@ export function TransferPanel() {
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
     }
   }, [])
 
@@ -409,6 +415,7 @@ export function TransferPanel() {
             startHeight: panel ? panel.getBoundingClientRect().height : heightRef.current
           }
           document.body.style.cursor = 'row-resize'
+          document.body.style.userSelect = 'none'
         }}
       />
       <div className="flex shrink-0 items-center gap-2 bg-gray-100 px-2 py-0.5">
@@ -461,9 +468,9 @@ export function TransferPanel() {
                 <TransferGroupRow
                   key={group.id}
                   group={group}
-                  onPause={(id) => void pause(id)}
-                  onResume={(id) => void resume(id)}
-                  onCancel={(id) => void cancel(id)}
+                  onPause={onPauseGroup}
+                  onResume={onResumeGroup}
+                  onCancel={onCancelGroup}
                 />
               ))}
               {syncJobs.length > 0 && (

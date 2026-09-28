@@ -18,6 +18,25 @@ interface VisitsStore {
   clearRemote: (siteId: string) => void
 }
 
+function sanitizeVisits(value: unknown): { local: string[]; remote: Record<string, string[]> } {
+  const source = (typeof value === 'object' && value !== null ? value : {}) as {
+    local?: unknown
+    remote?: unknown
+  }
+  const local = Array.isArray(source.local)
+    ? source.local.filter((item): item is string => typeof item === 'string')
+    : []
+  const remote: Record<string, string[]> = {}
+  if (typeof source.remote === 'object' && source.remote !== null) {
+    for (const [siteId, paths] of Object.entries(source.remote as Record<string, unknown>)) {
+      if (Array.isArray(paths)) {
+        remote[siteId] = paths.filter((item): item is string => typeof item === 'string')
+      }
+    }
+  }
+  return { local, remote }
+}
+
 export const useVisits = create<VisitsStore>()(
   persist(
     (set) => ({
@@ -36,6 +55,12 @@ export const useVisits = create<VisitsStore>()(
           return { remote }
         })
     }),
-    { name: 'filetrans-path-history', storage: createJSONStorage(() => localStorage) }
+    {
+      name: 'filetrans-path-history',
+      version: 1,
+      storage: createJSONStorage(() => localStorage),
+      migrate: (persisted) => sanitizeVisits(persisted),
+      merge: (persisted, current) => ({ ...current, ...sanitizeVisits(persisted) })
+    }
   )
 )

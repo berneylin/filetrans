@@ -29,7 +29,7 @@ describe('buildRsyncArgs', () => {
     expect(args).toEqual([
       '-a',
       '-s',
-      '--partial',
+      '--partial-dir=.filetrans-rsync-partial',
       '--no-owner',
       '--no-group',
       '--info=progress2,name',
@@ -93,6 +93,74 @@ describe('buildRsyncArgs', () => {
       '/home/user/models/',
       'root@10.0.0.2:/mnt/pfs/code/models'
     ])
+  })
+
+  it('progress2 下载源中的通配符加反斜杠转义（由远端 rsync 展开）', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'download',
+      remotePath: '/data/v[12]/a*b?c'
+    })
+    expect(args[args.length - 2]).toBe('root@10.0.0.2:/data/v\\[12\\]/a\\*b\\?c/')
+  })
+
+  it('progress2 上传目标中的通配符保持原样（目标不展开）', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'upload',
+      remotePath: '/data/v[12]'
+    })
+    expect(args[args.length - 1]).toBe('root@10.0.0.2:/data/v[12]')
+  })
+
+  it('自带参数转义模式下通配符路径加单引号并启用 --old-args', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'upload',
+      progress2: false,
+      argProtected: true,
+      remotePath: '/data/v[12]'
+    })
+    expect(args).toContain('--old-args')
+    expect(args[args.length - 1]).toBe("root@10.0.0.2:'/data/v[12]'")
+  })
+
+  it('连续构建多个通配符路径时每次都能识别通配符', () => {
+    const options = {
+      ...base,
+      direction: 'upload' as const,
+      progress2: false,
+      argProtected: true
+    }
+    const first = buildRsyncArgs({ ...options, remotePath: '/data/zzzzzzzz[old]' })
+    const second = buildRsyncArgs({ ...options, remotePath: '/x[1]' })
+    expect(first).toContain('--old-args')
+    expect(first[first.length - 1]).toBe("root@10.0.0.2:'/data/zzzzzzzz[old]'")
+    expect(second).toContain('--old-args')
+    expect(second[second.length - 1]).toBe("root@10.0.0.2:'/x[1]'")
+  })
+
+  it('转义通配符时不修改调用方传入的远程路径', () => {
+    const options = { ...base, direction: 'download' as const, remotePath: '/data/v[12]' }
+    buildRsyncArgs(options)
+    expect(options.remotePath).toBe('/data/v[12]')
+  })
+
+  it('手工引号模式下通配符路径只加单引号，不加 --old-args', () => {
+    const args = buildRsyncArgs({
+      ...base,
+      direction: 'download',
+      modernGnu: false,
+      progress2: false,
+      remotePath: '/data/v[12]'
+    })
+    expect(args).not.toContain('--old-args')
+    expect(args[args.length - 2]).toBe("root@10.0.0.2:'/data/v[12]/'")
+  })
+
+  it('IPv6 字面量主机加方括号', () => {
+    const args = buildRsyncArgs({ ...base, direction: 'upload', host: '::1' })
+    expect(args[args.length - 1]).toBe('root@[::1]:/mnt/pfs/code/models')
   })
 
   it('位置参数用 -- 隔断，以 - 开头的路径不当作选项', () => {
@@ -195,10 +263,13 @@ describe('buildSshConfig', () => {
     expect(config).toContain('UserKnownHostsFile "/tmp/kh"')
     expect(config).toContain('IdentityAgent none')
     expect(config).toContain('NumberOfPasswordPrompts 1')
+    expect(config).toContain('ServerAliveInterval 15')
+    expect(config).toContain('ServerAliveCountMax 3')
+    expect(config).toContain('PubkeyAuthentication no')
     expect(config).not.toContain('IdentityFile')
   })
 
-  it('提供密钥路径时写入 IdentityFile 与 IdentitiesOnly', () => {
+  it('提供密钥路径时写入 IdentityFile 与 IdentitiesOnly，并锁定公钥认证', () => {
     const config = buildSshConfig({
       host: 'h',
       port: 22,
@@ -208,6 +279,8 @@ describe('buildSshConfig', () => {
     })
     expect(config).toContain('IdentityFile "/home/u/.ssh/id_ed25519"')
     expect(config).toContain('IdentitiesOnly yes')
+    expect(config).toContain('PreferredAuthentications publickey')
+    expect(config).not.toContain('PubkeyAuthentication no')
   })
 
   it('包含非法字符的路径抛错', () => {

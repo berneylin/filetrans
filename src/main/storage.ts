@@ -46,8 +46,10 @@ async function readJson<T>(file: string, fallback: T, validate?: (value: unknown
   let raw: string
   try {
     raw = await fs.readFile(file, 'utf8')
-  } catch {
-    return fallback
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === 'ENOENT') return fallback
+    throw new Error(`无法读取数据文件 ${path.basename(file)}（${code ?? err}）`)
   }
   try {
     const parsed: unknown = JSON.parse(raw)
@@ -153,6 +155,20 @@ export function saveSite(input: SiteInput): Promise<SiteConfig> {
       secret = undefined
     } else if (input.password !== undefined || input.passphrase !== undefined) {
       secret = encryptSecret({ password: input.password, passphrase: input.passphrase })
+    } else if (existing && existing.authType !== input.authType) {
+      secret = undefined
+    }
+    if (secret && existing && secret === existing.secret) {
+      try {
+        const decrypted = decryptSecret(secret)
+        secret = encryptSecret(
+          input.authType === 'password'
+            ? { password: decrypted.password }
+            : { passphrase: decrypted.passphrase }
+        )
+      } catch {
+        secret = undefined
+      }
     }
 
     const site: StoredSite = {

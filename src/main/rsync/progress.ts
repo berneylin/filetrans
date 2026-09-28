@@ -25,10 +25,10 @@ const OPENRSYNC_UNITS: Record<string, number> = {
 }
 
 const PROGRESS_RE =
-  /^\s*([\d,.]+)\s+(\d{1,3})%\s+([\d.]+)([kMGT]?)B\/s\s+\d+:\d{2}:\d{2}\s*(?:\((?:xfr#(\d+),\s+)?(?:to-chk|ir-chk)=(\d+)\/(\d+)\))?/
+  /^\s*([\d,.]+)\s+(\d{1,3})%\s+([\d.]+)([kMGT]?)B\/s\s+[\d?]+:[\d?]{2}:[\d?]{2}\s*(?:\((?:xf(?:e)?r#(\d+),\s+)?(?:to-ch(?:ec)?k|ir-chk)=(\d+)\/(\d+)\))?/
 
 const OPENRSYNC_RE =
-  /^\s*(\d+)\s+(\d{1,3})%\s+(?:([\d.]+)(KB|MB|GB|TB)\/s\s+)?\d+:\d{2}:\d{2}(?:\s+\(xfer#(\d+),\s+to-check=(\d+)\/(\d+)\))?\s*$/
+  /^\s*(\d+)\s+(\d{1,3})%\s+(?:([\d.]+)(KB|MB|GB|TB)\/s\s+)?[\d?]+:[\d?]{2}:[\d?]{2}(?:\s+\(xfer#(\d+),\s+to-check=(\d+)\/(\d+)\))?\s*$/
 
 function parseCount(raw: string): number {
   return Number.parseInt(raw.replace(/,/g, ''), 10)

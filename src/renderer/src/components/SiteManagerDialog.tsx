@@ -4,6 +4,7 @@ import { useSites } from '../stores/sites'
 import { useTabs } from '../stores/tabs'
 import { useUi } from '../stores/ui'
 import { errorMessage } from '../utils/errors'
+import { nextSiteName } from '../utils/sites'
 import { btn, btnDanger, btnPrimary, dialogInput } from '../utils/styles'
 import { Modal } from './Modal'
 
@@ -94,36 +95,13 @@ export function SiteManagerDialog() {
     setError(null)
   }
 
-  const handleNew = async (): Promise<void> => {
-    setBusy(true)
+  const handleNew = (): void => {
     setError(null)
-    try {
-      const names = new Set(sites.map((site) => site.name))
-      let name = '新站点'
-      let index = 2
-      while (names.has(name)) {
-        name = `新站点 ${index}`
-        index++
-      }
-      const saved = await window.api.sites.save({
-        name,
-        host: '',
-        port: 22,
-        username: '',
-        authType: 'password',
-        rememberSecret: false
-      })
-      await loadSites()
-      selectSite(saved)
-      requestAnimationFrame(() => {
-        nameInputRef.current?.focus()
-        nameInputRef.current?.select()
-      })
-    } catch (err) {
-      setError(errorMessage(err))
-    } finally {
-      setBusy(false)
-    }
+    setForm({ ...emptyForm(), name: nextSiteName(sites) })
+    requestAnimationFrame(() => {
+      nameInputRef.current?.focus()
+      nameInputRef.current?.select()
+    })
   }
 
   const buildInput = (): SiteInput | null => {    if (!form.name.trim() || !form.host.trim() || !form.username.trim()) {
@@ -141,7 +119,7 @@ export function SiteManagerDialog() {
       passphrase: form.authType === 'key' ? form.passphrase || undefined : undefined,
       password: form.authType === 'password' ? form.password || undefined : undefined,
       remotePath: form.remotePath.trim() || undefined,
-      rememberSecret: form.rememberSecret
+      rememberSecret: form.rememberSecret && encryptionAvailable
     }
     return input
   }
@@ -261,7 +239,7 @@ export function SiteManagerDialog() {
               ))
             )}
           </div>
-          <button className={`${btn} mt-2`} disabled={busy} onClick={() => void handleNew()}>
+          <button className={`${btn} mt-2`} disabled={busy} onClick={handleNew}>
             新建站点
           </button>
         </div>

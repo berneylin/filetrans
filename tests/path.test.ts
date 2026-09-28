@@ -3,6 +3,7 @@ import {
   escapesParent,
   findBannedDir,
   isTransientFile,
+  isWithin,
   posixBasename,
   posixDirname,
   posixJoin,
@@ -149,5 +150,26 @@ describe('isTransientFile', () => {
     expect(isTransientFile('.filetrans-backup-not-a-uuid')).toBe(false)
     expect(isTransientFile('movie.filetrans-part.mkv')).toBe(false)
     expect(isTransientFile('movie.mkv')).toBe(false)
+  })
+})
+
+describe('isWithin', () => {
+  it('根目录自身及其子路径视为在范围内', () => {
+    expect(isWithin('/dl', '/dl')).toBe(true)
+    expect(isWithin('/dl', '/dl/a')).toBe(true)
+    expect(isWithin('/dl', '/dl/a/b')).toBe(true)
+  })
+
+  it('以 .. 开头的合法文件名不算越界', () => {
+    expect(isWithin('/dl', '/dl/..data')).toBe(true)
+    expect(isWithin('/dl', '/dl/...x')).toBe(true)
+    expect(isWithin('/dl', '/dl/..2024_01_01/config')).toBe(true)
+  })
+
+  it('跳出根目录的路径视为越界', () => {
+    expect(isWithin('/dl', '/')).toBe(false)
+    expect(isWithin('/dl', '/dl/../etc/passwd')).toBe(false)
+    expect(isWithin('/dl', '/dlx/a')).toBe(false)
+    expect(isWithin('/dl/sub', '/dl/other')).toBe(false)
   })
 })

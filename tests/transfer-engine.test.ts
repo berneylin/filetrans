@@ -12,6 +12,8 @@ import { typeFromMode } from '@shared/format'
 import type { ConflictPrompt, ConflictResolution, DirListing, FileEntry, TransferGroup } from '@shared/types'
 import type { SessionManager } from '../src/main/sftp/manager'
 import {
+  caseFoldCollisions,
+  localCaseInsensitive,
   PARALLEL_MIN_BYTES,
   PARALLEL_MIN_SEGMENT,
   planParallelSegments,
@@ -80,6 +82,9 @@ interface FakeStats {
 }
 
 class FakeSession {
+  id = 'fake-session'
+  params = { host: 'fake-host', port: 22, username: 'tester' }
+  connected = true
   files = new Map<string, Buffer>()
   dirs = new Set<string>()
   links = new Map<string, string>()
@@ -318,6 +323,39 @@ describe('resolveResumeOffset', () => {
   it('大小一致视为已完成', () => {
     expect(resolveResumeOffset(100, 100)).toEqual({ complete: true, offset: 100 })
     expect(resolveResumeOffset(0, 0)).toEqual({ complete: true, offset: 0 })
+  })
+})
+
+describe('大小写冲突检测', () => {
+  it('按 NFC 与小写折叠找出冲突项，保留先出现的路径', () => {
+    const collisions = caseFoldCollisions([
+      '/d/README',
+      '/d/readme',
+      '/d/b',
+      '/d/Caf\u00e9',
+      '/d/cafe\u0301'
+    ])
+    expect([...collisions.entries()]).toEqual([
+      [1, '/d/README'],
+      [4, '/d/Caf\u00e9']
+    ])
+  })
+
+  it('探测结果与文件系统实际行为一致，且不留下探测文件', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'filetrans-case-'))
+    try {
+      await fs.writeFile(path.join(dir, 'probe-a'), '')
+      const expected = fsSyncExists(path.join(dir, 'PROBE-A'))
+      await fs.rm(path.join(dir, 'probe-a'))
+      expect(await localCaseInsensitive(dir)).toBe(expected)
+      expect(await fs.readdir(dir)).toEqual([])
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('目录不可写时按区分大小写处理', async () => {
+    expect(await localCaseInsensitive(path.join(os.tmpdir(), 'filetrans-missing-dir-xyz'))).toBe(false)
   })
 })
 
@@ -696,6 +734,7 @@ describe('传输引擎', () => {
       `${local}.filetrans-part.json`,
       JSON.stringify({
         base: 0,
+        mtime: 1700000000,
         segments: segments.map((segment, index) => ({
           ...segment,
           written: index === 0 ? segment.end - segment.start : index === 1 ? seg1Written : 0
@@ -816,7 +855,7 @@ describe('传输引擎', () => {
       await fs.writeFile(`${local}.filetrans-part`, data.subarray(0, prefixSize))
       await fs.writeFile(
         `${local}.filetrans-part.json`,
-        JSON.stringify({ sequential: true, size: data.length })
+        JSON.stringify({ sequential: true, size: data.length, mtime: 1700000000 })
       )
     }
     const id = await manager.start({
@@ -1268,4 +1307,394 @@ describe('传输引擎', () => {
     expect(final?.failedCount).toBe(1)
     expect(final?.failedFiles?.[0].path).toBe('/remote/dest/pkg/bad-link')
   }, 30000)
+
+  describe('冲突决议下的符号链接', () => {
+    async function setupLinkOverDir(harnessResolution: ConflictResolution) {
+      const dest = path.join(tempDir, 'dest')
+      const linkTarget = path.join(dest, 'src', 'current')
+      await fs.mkdir(linkTarget, { recursive: true })
+      await fs.writeFile(path.join(linkTarget, 'local.txt'), Buffer.from('本地修改'))
+      const { fake, events, manager } = makeHarness(harnessResolution)
+      fake.dirs.add('/remote/src')
+      fake.links.set('/remote/src/current', 'releases/v2')
+      const id = await manager.start({
+        sessionId: 'test-session',
+        direction: 'download',
+        sources: ['/remote/src'],
+        targetDir: dest,
+        recursive: true,
+        options: { resume: true, retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => {
+        const status = latest(events, id)?.status
+        return status === 'done' || status === 'error'
+      })
+      return { linkTarget, final: latest(events, id) }
+    }
+
+    it('续传决议下链接不再递归删除同名本地目录', async () => {
+      const { linkTarget, final } = await setupLinkOverDir('resume')
+      expect(final?.status).toBe('error')
+      expect(final?.failedFiles?.[0].error).toContain('目标为目录')
+      expect((await fs.lstat(linkTarget)).isDirectory()).toBe(true)
+      await expect(fs.readFile(path.join(linkTarget, 'local.txt'), 'utf8')).resolves.toBe(
+        '本地修改'
+      )
+    })
+
+    it('跳过决议下同名链接被过滤且目录原样保留', async () => {
+      const { linkTarget, final } = await setupLinkOverDir('skip')
+      expect(final?.status).toBe('done')
+      expect((await fs.lstat(linkTarget)).isDirectory()).toBe(true)
+      await expect(fs.readlink(linkTarget)).rejects.toThrow()
+    })
+
+    it('覆盖决议下链接按用户确认替换本地目录', async () => {
+      const { linkTarget } = await setupLinkOverDir('overwrite')
+      expect((await fs.lstat(linkTarget)).isSymbolicLink()).toBe(true)
+      const entries = await fs.readdir(path.dirname(linkTarget))
+      expect(entries.filter((name) => name.includes('filetrans-backup'))).toEqual([])
+    })
+
+    it('上传方向续传决议下链接不顶替同名远端目录', async () => {
+      const local = path.join(tempDir, 'pkg')
+      await fs.mkdir(path.join(local, 'sub'), { recursive: true })
+      await fs.symlink('sub', path.join(local, 'current'))
+      const { fake, events, manager } = makeHarness('resume')
+      fake.dirs.add('/remote/dest/pkg/current')
+
+      const id = await manager.start({
+        sessionId: 'test-session',
+        direction: 'upload',
+        sources: [local],
+        targetDir: '/remote/dest',
+        recursive: true,
+        options: { resume: true, retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => {
+        const status = latest(events, id)?.status
+        return status === 'done' || status === 'error'
+      }, 30000)
+
+      const final = latest(events, id)
+      expect(final?.status).toBe('error')
+      expect(final?.failedFiles?.[0].error).toContain('目标为目录')
+      expect(fake.dirs.has('/remote/dest/pkg/current')).toBe(true)
+      expect(fake.links.has('/remote/dest/pkg/current')).toBe(false)
+    }, 30000)
+  })
+
+  it('下载时服务端返回非法或越界的文件名被跳过且不越界写入', async () => {
+    const dest = path.join(tempDir, 'dl')
+    await fs.mkdir(dest)
+    const { fake, events, manager } = makeHarness()
+    fake.dirs.add('/remote/src')
+    fake.files.set('/remote/src/ok.txt', Buffer.from('ok'))
+    const entry = (
+      name: string,
+      entryPath: string,
+      size: number
+    ): FileEntry => ({
+      name,
+      path: entryPath,
+      type: 'file',
+      size,
+      mtime: 1700000000000,
+      atime: 1700000000000,
+      mode: 0o100640,
+      isSymlink: false
+    })
+    fake.list = (async (target: string) => {
+      if (target !== '/remote/src') throw new Error('No such file')
+      return {
+        path: target,
+        parent: '/remote',
+        entries: [
+          entry('ok.txt', '/remote/src/ok.txt', 2),
+          entry('../evil.txt', '/remote/src/evil', 4),
+          entry('a/b', '/remote/src/ab', 1)
+        ]
+      }
+    }) as typeof fake.list
+
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: ['/remote/src'],
+      targetDir: dest,
+      recursive: true,
+      options: { retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+
+    const final = latest(events, id)
+    expect(final?.status).toBe('done')
+    expect(final?.skippedCount).toBe(2)
+    expect(final?.warning).toContain('非法或越界')
+    expect(await fs.readFile(path.join(dest, 'src', 'ok.txt'), 'utf8')).toBe('ok')
+    expect((await fs.readdir(dest)).sort()).toEqual(['src'])
+    expect((await fs.readdir(path.join(dest, 'src'))).sort()).toEqual(['ok.txt'])
+    await expect(fs.access(path.join(tempDir, 'evil.txt'))).rejects.toThrow()
+  })
+
+  it('关闭保留权限时上传完成后仍设置 0644', async () => {
+    const source = path.join(tempDir, 'perm.bin')
+    await fs.writeFile(source, randomBytes(4096))
+
+    const { fake, events, manager } = makeHarness()
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [source],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.chmodCalls).toContainEqual({ path: '/remote/dest/perm.bin.filetrans-part', mode: 0o644 })
+  })
+
+  it('下载时以 .. 开头的合法文件名正常写入', async () => {
+    const dest = path.join(tempDir, 'cfg')
+    await fs.mkdir(dest)
+    const { fake, events, manager } = makeHarness()
+    fake.dirs.add('/remote/conf')
+    fake.files.set('/remote/conf/..data', Buffer.from('config'))
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: ['/remote/conf'],
+      targetDir: dest,
+      recursive: true,
+      options: { retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(latest(events, id)?.skippedCount ?? 0).toBe(0)
+    expect(await fs.readFile(path.join(dest, 'conf', '..data'), 'utf8')).toBe('config')
+  })
+
+  it('长文件名下载暂停恢复后仍从断点续传', async () => {
+    const name = `${'长'.repeat(65)}.bin`
+    const data = randomBytes(1024 * 1024)
+    const remote = `/remote/${name}`
+    const local = path.join(tempDir, name)
+    const { fake, events, manager } = makeHarness()
+    fake.files.set(remote, data)
+    fake.readDelayMs = 20
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'download',
+      sources: [remote],
+      targetDir: tempDir,
+      recursive: true,
+      options: { resume: true, retries: 0, concurrency: 1, ...OFF_ATTRS }
+    })
+    const part = `${local}.filetrans-part`
+    await waitFor(() => fsSyncExists(part) && statSync(part).size > 0)
+    manager.pause(id)
+    await waitFor(() => latest(events, id)?.status === 'paused')
+    await waitFor(() => fake.activeReads === 0)
+    manager.resume(id)
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect((await fs.readFile(local)).equals(data)).toBe(true)
+    expect(fake.readLog[fake.readLog.length - 1].start).toBeGreaterThan(0)
+  })
+
+  it('选择跳过时只剩临时文件的目标按续传补齐', async () => {
+    const srcDir = path.join(tempDir, 'partial')
+    await fs.mkdir(srcDir)
+    const data = randomBytes(512 * 1024)
+    await fs.writeFile(path.join(srcDir, 'big.bin'), data)
+    await fs.writeFile(path.join(srcDir, 'old.txt'), 'new')
+    const { fake, events, manager } = makeHarness('skip')
+    await fake.mkdirp('/remote/dest/partial')
+    fake.files.set(
+      '/remote/dest/partial/big.bin.filetrans-part',
+      Buffer.from(data.subarray(0, 200 * 1024))
+    )
+    fake.files.set('/remote/dest/partial/old.txt', Buffer.from('old'))
+    const id = await manager.start({
+      sessionId: 'test-session',
+      direction: 'upload',
+      sources: [srcDir],
+      targetDir: '/remote/dest',
+      recursive: true,
+      options: { resume: true, retries: 0, ...OFF_ATTRS }
+    })
+    await waitFor(() => latest(events, id)?.status === 'done')
+    expect(fake.files.get('/remote/dest/partial/big.bin')?.equals(data)).toBe(true)
+    expect(fake.files.get('/remote/dest/partial/old.txt')?.toString()).toBe('old')
+    expect(
+      fake.writeLog.some(
+        (entry) =>
+          entry.path === '/remote/dest/partial/big.bin.filetrans-part' && entry.offset === 200 * 1024
+      )
+    ).toBe(true)
+  })
+
+  describe('断线后恢复', () => {
+    function makeReconnectHarness() {
+      const first = new FakeSession()
+      const second = new FakeSession()
+      second.id = 'fake-session-2'
+      second.files = first.files
+      second.dirs = first.dirs
+      second.links = first.links
+      const events: TransferGroup[] = []
+      const prompts: ConflictPrompt[] = []
+      let current = first
+      let manager: TransferManager
+      const webContents = {
+        send: (channel: string, payload: unknown) => {
+          if (channel === IPC.evtTransferUpdate) {
+            events.push(payload as TransferGroup)
+          } else if (channel === IPC.evtConflictPrompt) {
+            const prompt = payload as ConflictPrompt
+            prompts.push(prompt)
+            setTimeout(() => manager.resolveConflict(prompt.transferId, 'skip'), 0)
+          }
+        }
+      } as unknown as WebContents
+      const sessions = {
+        get: () => current,
+        findByParams: () => (second.connected ? second : undefined)
+      } as unknown as SessionManager
+      manager = new TransferManager(() => webContents, sessions)
+      const drop = (): void => {
+        first.connected = false
+        current = second
+        manager.handleSessionClosed(first.id)
+      }
+      return { first, events, prompts, manager, drop }
+    }
+
+    it('上传冲突检测期间断线，恢复后重新检测冲突而不静默覆盖已有文件', async () => {
+      const srcDir = path.join(tempDir, 'up')
+      await fs.mkdir(srcDir)
+      await fs.writeFile(path.join(srcDir, 'a.txt'), 'new-a')
+      await fs.writeFile(path.join(srcDir, 'b.txt'), 'new-b')
+      const { first, events, prompts, manager, drop } = makeReconnectHarness()
+      await first.mkdirp('/remote/dest/up')
+      first.files.set('/remote/dest/up/a.txt', Buffer.from('old-a'))
+      const lstat = first.lstat.bind(first)
+      first.lstat = async (target: string) => {
+        if (target === '/remote/dest/up/a.txt' && first.connected) drop()
+        if (!first.connected) throw new Error('SFTP 会话未连接')
+        return lstat(target)
+      }
+
+      const id = await manager.start({
+        sessionId: 'fake-session',
+        direction: 'upload',
+        sources: [srcDir],
+        targetDir: '/remote/dest',
+        recursive: true,
+        options: { resume: false, retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => latest(events, id)?.status === 'paused')
+      manager.resume(id)
+      await waitFor(() => latest(events, id)?.status === 'done')
+
+      expect(
+        prompts.some((prompt) =>
+          prompt.items.some((item) => item.targetPath === '/remote/dest/up/a.txt')
+        )
+      ).toBe(true)
+      expect(first.files.get('/remote/dest/up/a.txt')?.toString()).toBe('old-a')
+      expect(first.files.get('/remote/dest/up/b.txt')?.toString()).toBe('new-b')
+    })
+
+    it('上传建目录时断线，恢复后补建目录并传完全部文件', async () => {
+      const srcDir = path.join(tempDir, 'tree')
+      await fs.mkdir(path.join(srcDir, 'sub'), { recursive: true })
+      await fs.writeFile(path.join(srcDir, 'sub', 'a.txt'), 'a')
+      await fs.writeFile(path.join(srcDir, 'top.txt'), 'top')
+      const { first, events, manager, drop } = makeReconnectHarness()
+      const mkdirp = first.mkdirp.bind(first)
+      first.mkdirp = async (target: string) => {
+        if (target === '/remote/dest/tree/sub' && first.connected) drop()
+        if (!first.connected) throw new Error('SFTP 会话未连接')
+        return mkdirp(target)
+      }
+
+      const id = await manager.start({
+        sessionId: 'fake-session',
+        direction: 'upload',
+        sources: [srcDir],
+        targetDir: '/remote/dest',
+        recursive: true,
+        options: { retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => latest(events, id)?.status === 'paused')
+      manager.resume(id)
+      await waitFor(() => latest(events, id)?.status === 'done')
+
+      expect(latest(events, id)?.failedCount ?? 0).toBe(0)
+      expect(first.files.get('/remote/dest/tree/sub/a.txt')?.toString()).toBe('a')
+      expect(first.files.get('/remote/dest/tree/top.txt')?.toString()).toBe('top')
+    })
+
+    it('上传创建符号链接时断线，恢复后链接照常创建', async () => {
+      const srcDir = path.join(tempDir, 'withlink')
+      await fs.mkdir(srcDir)
+      await fs.writeFile(path.join(srcDir, 'top.txt'), 'top')
+      await fs.symlink('top.txt', path.join(srcDir, 'link'))
+      const { first, events, manager, drop } = makeReconnectHarness()
+      first.symlink = async () => {
+        if (first.connected) drop()
+        throw new Error('SFTP 会话未连接')
+      }
+
+      const id = await manager.start({
+        sessionId: 'fake-session',
+        direction: 'upload',
+        sources: [srcDir],
+        targetDir: '/remote/dest',
+        recursive: true,
+        options: { retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => latest(events, id)?.status === 'paused')
+      manager.resume(id)
+      await waitFor(() => latest(events, id)?.status === 'done')
+
+      expect(latest(events, id)?.failedCount ?? 0).toBe(0)
+      expect(first.links.has('/remote/dest/withlink/link')).toBe(true)
+      expect(first.files.get('/remote/dest/withlink/top.txt')?.toString()).toBe('top')
+    })
+
+    it('下载展开子目录时断线，恢复后重新展开而不静默跳过子目录', async () => {
+      const dest = path.join(tempDir, 'dl-reconnect')
+      await fs.mkdir(dest)
+      const { first, events, manager, drop } = makeReconnectHarness()
+      first.dirs.add('/remote/src')
+      first.dirs.add('/remote/src/sub1')
+      first.dirs.add('/remote/src/sub2')
+      first.files.set('/remote/src/top.txt', Buffer.from('top'))
+      first.files.set('/remote/src/sub1/a.txt', Buffer.from('a'))
+      first.files.set('/remote/src/sub2/b.txt', Buffer.from('b'))
+      const list = first.list.bind(first)
+      first.list = async (target: string) => {
+        if (target === '/remote/src/sub2' && first.connected) drop()
+        if (!first.connected) throw new Error('SFTP 会话未连接')
+        return list(target)
+      }
+
+      const id = await manager.start({
+        sessionId: 'fake-session',
+        direction: 'download',
+        sources: ['/remote/src'],
+        targetDir: dest,
+        recursive: true,
+        options: { retries: 0, ...OFF_ATTRS }
+      })
+      await waitFor(() => latest(events, id)?.status === 'paused')
+      manager.resume(id)
+      await waitFor(() => latest(events, id)?.status === 'done')
+
+      expect(latest(events, id)?.skippedCount ?? 0).toBe(0)
+      expect(await fs.readFile(path.join(dest, 'src', 'top.txt'), 'utf8')).toBe('top')
+      expect(await fs.readFile(path.join(dest, 'src', 'sub1', 'a.txt'), 'utf8')).toBe('a')
+      expect(await fs.readFile(path.join(dest, 'src', 'sub2', 'b.txt'), 'utf8')).toBe('b')
+    })
+  })
 })

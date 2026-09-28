@@ -200,8 +200,6 @@ export const useTabs = create<TabsStore>((set, get) => {
     closeTab: async (id) => {
       const tab = get().tabs.find((item) => item.id === id)
       if (tab?.status === 'connecting') closing.add(id)
-      loadSeqs.delete(id)
-      superseded.delete(id)
       useUi.getState().closeMenu()
       if (tab?.sessionId) {
         const sessionId = tab.sessionId
@@ -228,6 +226,8 @@ export const useTabs = create<TabsStore>((set, get) => {
           /* 忽略断开异常 */
         }
       }
+      loadSeqs.delete(id)
+      superseded.delete(id)
       set((state) => {
         const index = state.tabs.findIndex((item) => item.id === id)
         const tabs = state.tabs.filter((item) => item.id !== id)

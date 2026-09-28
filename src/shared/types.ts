@@ -150,6 +150,8 @@ export interface ConflictItem {
   targetPath: string
   size: number
   type: 'file' | 'directory' | 'symlink'
+  /** 目标位置只有上次残留的临时文件，最终文件并不存在 */
+  partial?: boolean
 }
 
 export interface ConflictPrompt {

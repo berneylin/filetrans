@@ -122,6 +122,17 @@ export function paneRefresh(side: PaneSide): Promise<void> {
   return useTabs.getState().refresh(id)
 }
 
+export function currentTabId(): string | null {
+  return useTabs.getState().activeId
+}
+
+export function paneRefreshTab(side: PaneSide, tabId: string | null): Promise<void> {
+  if (side === 'local' || !tabId) return paneRefresh(side)
+  const tab = useTabs.getState().tabs.find((item) => item.id === tabId)
+  if (!tab || tab.loading) return Promise.resolve()
+  return useTabs.getState().refresh(tabId)
+}
+
 export function paneNavigateUp(side: PaneSide): Promise<void> {
   if (side === 'local') return useFiles.getState().navigateUp()
   const id = useTabs.getState().activeId

@@ -23,6 +23,26 @@ export function fingerprintOf(key: Buffer): string {
   return `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`
 }
 
+export function translateConnectError(err: Error): Error {
+  const message = err.message ?? ''
+  if (/Encrypted private key detected|passphrase/i.test(message) && /private|key/i.test(message)) {
+    return new Error('私钥已加密，请填写正确的密钥口令', { cause: err })
+  }
+  if (/All authentication methods have failed|Authentication failed/i.test(message)) {
+    return new Error('认证失败：请检查用户名、密码或密钥配置', { cause: err })
+  }
+  if (/keepalive|timed? out|timeout/i.test(message)) {
+    return new Error('连接超时：服务器无响应', { cause: err })
+  }
+  if (/ECONNREFUSED/i.test(message)) {
+    return new Error('连接被拒绝：请检查主机地址和端口', { cause: err })
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(message)) {
+    return new Error('无法解析主机名：请检查主机地址', { cause: err })
+  }
+  return err
+}
+
 export async function checkPrivateKey(
   file: string,
   passphrase?: string
@@ -58,6 +78,15 @@ interface RawDirEntry {
   attrs: Stats
 }
 
+function translateSftpError(err: unknown, target?: string): Error {
+  const code = (err as { code?: number } | null)?.code
+  const suffix = target ? `: ${target}` : ''
+  if (code === 2) return new Error(`路径不存在${suffix}`)
+  if (code === 3) return new Error(`权限不足${suffix}`)
+  if (code === 4) return new Error(`SFTP 操作失败${suffix}`)
+  return err instanceof Error ? err : new Error(String(err))
+}
+
 export class SftpSession extends EventEmitter {
   readonly id: string
   readonly params: ConnectParams
@@ -66,6 +95,7 @@ export class SftpSession extends EventEmitter {
   private closed = false
   private homePath: string | null = null
   private hostKeyBlob: Buffer | null = null
+  private acceptedHostKey: Buffer | null = null
 
   constructor(
     params: ConnectParams,
@@ -79,6 +109,20 @@ export class SftpSession extends EventEmitter {
 
   get hostKey(): Buffer | null {
     return this.hostKeyBlob
+  }
+
+  private handleChannelLost(): void {
+    if (this.closed) return
+    this.closed = true
+    this.sftp = null
+    const client = this.client
+    this.client = null
+    try {
+      client?.end()
+    } catch {
+      /* 客户端已销毁 */
+    }
+    this.emit('close')
   }
 
   async connect(): Promise<void> {
@@ -108,37 +152,23 @@ export class SftpSession extends EventEmitter {
             return
           }
           this.sftp = sftp
+          sftp.on('error', () => this.handleChannelLost())
+          sftp.on('close', () => this.handleChannelLost())
+          sftp.on('end', () => this.handleChannelLost())
           settled = true
           resolve()
         })
       })
       client.on('error', (err: Error) => {
         this.emit('session-error', err)
-        fail(err)
+        fail(translateConnectError(err))
       })
       client.on('close', () => {
         const wasClosed = this.closed
         this.closed = true
         this.sftp = null
         if (!wasClosed) this.emit('close')
-      })
-      client.connect({
-        host,
-        port,
-        username,
-        password: password || undefined,
-        privateKey,
-        passphrase: passphrase || undefined,
-        tryKeyboard: true,
-        keepaliveInterval: 15000,
-        keepaliveCountMax: 3,
-        readyTimeout: 120000,
-        hostVerifier: ((key: Buffer, callback: (ok: boolean) => void) => {
-          this.hostKeyBlob = key
-          this.resolveHostKey({ host, port, fingerprint: fingerprintOf(key), known: 'unknown' })
-            .then(({ accept }) => callback(accept))
-            .catch(() => callback(false))
-        }) as never
+        fail(new Error('连接在认证完成前被服务器关闭'))
       })
       client.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
         if (privateKeyPath || !password || prompts.length !== 1 || prompts[0].echo) {
@@ -147,6 +177,37 @@ export class SftpSession extends EventEmitter {
         }
         finish([password])
       })
+      try {
+        client.connect({
+          host,
+          port,
+          username,
+          password: password || undefined,
+          privateKey,
+          passphrase: passphrase || undefined,
+          tryKeyboard: true,
+          keepaliveInterval: 15000,
+          keepaliveCountMax: 3,
+          readyTimeout: 120000,
+          hostVerifier: ((key: Buffer, callback: (ok: boolean) => void) => {
+            if (this.acceptedHostKey) {
+              callback(key.equals(this.acceptedHostKey))
+              return
+            }
+            this.resolveHostKey({ host, port, fingerprint: fingerprintOf(key), known: 'unknown' })
+              .then(({ accept }) => {
+                if (accept) {
+                  this.acceptedHostKey = key
+                  this.hostKeyBlob = key
+                }
+                callback(accept)
+              })
+              .catch(() => callback(false))
+          }) as never
+        })
+      } catch (err) {
+        fail(translateConnectError(err instanceof Error ? err : new Error(String(err))))
+      }
     })
   }
 
@@ -160,10 +221,14 @@ export class SftpSession extends EventEmitter {
   }
 
   private call<T>(
-    fn: (cb: (err: Error | undefined | null, result?: T) => void) => void
+    fn: (cb: (err: Error | undefined | null, result?: T) => void) => void,
+    target?: string
   ): Promise<T> {
     return new Promise((resolve, reject) => {
-      fn((err, result) => (err ? reject(err) : resolve(result as T)))
+      fn((err, result) => {
+        if (err) reject(translateSftpError(err, target))
+        else resolve(result as T)
+      })
     })
   }
 
@@ -176,9 +241,10 @@ export class SftpSession extends EventEmitter {
 
   async resolvePath(input: string): Promise<string> {
     if (!input) return this.home()
-    if (input.startsWith('~')) {
+    if (input === '~') return this.home()
+    if (input.startsWith('~/')) {
       const home = await this.home()
-      return posixJoin(home, input.slice(1))
+      return posixJoin(home, input.slice(2))
     }
     if (!input.startsWith('/')) {
       const home = await this.home()
@@ -195,35 +261,63 @@ export class SftpSession extends EventEmitter {
     } catch (err) {
       throw new Error(`无法读取目录 ${resolved}: ${(err as Error).message}`)
     }
-    const entries: FileEntry[] = raw
-      .filter((item) => item.filename !== '.' && item.filename !== '..')
-      .filter((item) => !isTransientFile(item.filename))
-      .map((item) => {
-        const type = typeFromMode(item.attrs.mode) as EntryType
-        return {
-          name: item.filename,
-          path: posixJoin(resolved, item.filename),
-          type,
-          size: item.attrs.size ?? 0,
-          mtime: (item.attrs.mtime ?? 0) * 1000,
-          atime: (item.attrs.atime ?? 0) * 1000,
-          mode: item.attrs.mode ?? 0,
-          isSymlink: type === 'symlink'
-        }
+    const seen = new Set<string>()
+    const entries: FileEntry[] = []
+    for (const item of raw) {
+      const name = item.filename
+      if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\0')) {
+        continue
+      }
+      if (isTransientFile(name)) continue
+      if (seen.has(name)) {
+        throw new Error(`服务器在目录 ${resolved} 中返回了重复的文件名 ${name}，已中止以避免写入错误位置`)
+      }
+      seen.add(name)
+      const type = typeFromMode(item.attrs.mode) as EntryType
+      entries.push({
+        name,
+        path: posixJoin(resolved, name),
+        type,
+        size: item.attrs.size ?? 0,
+        mtime: (item.attrs.mtime ?? 0) * 1000,
+        atime: (item.attrs.atime ?? 0) * 1000,
+        mode: item.attrs.mode ?? 0,
+        isSymlink: type === 'symlink'
       })
+    }
+    const links = entries.filter((entry) => entry.isSymlink)
+    let cursor = 0
+    const resolveLink = async (): Promise<void> => {
+      for (;;) {
+        const index = cursor++
+        if (index >= links.length) return
+        const entry = links[index]
+        try {
+          const target = await this.stat(entry.path)
+          const targetType = typeFromMode(target.mode)
+          if (targetType === 'file' || targetType === 'directory') {
+            entry.type = targetType
+            entry.mode = target.mode
+          }
+        } catch {
+          /* 悬空链接保留 symlink 类型 */
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(16, links.length) }, () => resolveLink()))
     return { path: resolved, parent: posixParent(resolved), entries }
   }
 
   async stat(target: string): Promise<Stats> {
-    return this.call((cb) => this.channel.stat(target, cb))
+    return this.call((cb) => this.channel.stat(target, cb), target)
   }
 
   async lstat(target: string): Promise<Stats> {
-    return this.call((cb) => this.channel.lstat(target, cb))
+    return this.call((cb) => this.channel.lstat(target, cb), target)
   }
 
   async realpath(target: string): Promise<string> {
-    return this.call((cb) => this.channel.realpath(target, cb))
+    return this.call((cb) => this.channel.realpath(target, cb), target)
   }
 
   exec(
@@ -281,21 +375,21 @@ export class SftpSession extends EventEmitter {
   }
 
   async readlink(target: string): Promise<string> {
-    return this.call((cb) => this.channel.readlink(target, cb))
+    return this.call((cb) => this.channel.readlink(target, cb), target)
   }
 
   async symlink(targetPath: string, linkPath: string): Promise<void> {
-    await this.call((cb) => this.channel.symlink(targetPath, linkPath, cb))
+    await this.call((cb) => this.channel.symlink(targetPath, linkPath, cb), linkPath)
   }
 
   async finalizeTransfer(fromPath: string, toPath: string): Promise<void> {
     const rename = (source: string, target: string): Promise<void> =>
-      this.call((cb) => this.channel.rename(source, target, cb))
+      this.call((cb) => this.channel.rename(source, target, cb), target)
     await replaceWithRollback(fromPath, toPath, {
       rename,
       replace: async (source, target) => {
         try {
-          await this.call((cb) => this.channel.ext_openssh_rename(source, target, cb))
+          await this.call((cb) => this.channel.ext_openssh_rename(source, target, cb), target)
         } catch {
           await rename(source, target)
         }
@@ -352,7 +446,10 @@ export class SftpSession extends EventEmitter {
 
   async renameEntry(target: string, newName: string): Promise<string> {
     const dest = posixJoin(posixDirname(target), validateName(newName))
-    await this.call((cb) => this.channel.rename(target, dest, cb))
+    if (dest.toLowerCase() !== target.toLowerCase() && (await this.lexists(dest))) {
+      throw new Error(`已存在同名文件或目录: ${dest}`)
+    }
+    await this.call((cb) => this.channel.rename(target, dest, cb), target)
     return dest
   }
 
@@ -370,25 +467,28 @@ export class SftpSession extends EventEmitter {
     const stats = await this.lstat(target)
     const type = typeFromMode(stats.mode)
     if (type === 'directory') {
-      const children = await this.call<RawDirEntry[]>((cb) => this.channel.readdir(target, cb))
+      const children = await this.call<RawDirEntry[]>(
+        (cb) => this.channel.readdir(target, cb),
+        target
+      )
       for (const child of children) {
         if (child.filename === '.' || child.filename === '..') continue
         await this.removeEntry(posixJoin(target, child.filename))
       }
-      await this.call((cb) => this.channel.rmdir(target, cb))
+      await this.call((cb) => this.channel.rmdir(target, cb), target)
     } else {
-      await this.call((cb) => this.channel.unlink(target, cb))
+      await this.call((cb) => this.channel.unlink(target, cb), target)
     }
   }
 
   async chmodEntry(target: string, mode: number): Promise<void> {
     assertPermissionMode(mode)
-    await this.call((cb) => this.channel.chmod(target, mode, cb))
+    await this.call((cb) => this.channel.chmod(target, mode, cb), target)
   }
 
   async cleanTransientFiles(target: string): Promise<number> {
     const resolved = await this.resolvePath(target)
-    const raw = await this.call<RawDirEntry[]>((cb) => this.channel.readdir(resolved, cb))
+    const raw = await this.call<RawDirEntry[]>((cb) => this.channel.readdir(resolved, cb), resolved)
     let removed = 0
     for (const item of raw) {
       if (item.filename === '.' || item.filename === '..') continue
@@ -407,7 +507,7 @@ export class SftpSession extends EventEmitter {
   }
 
   async utimes(target: string, atime: number, mtime: number): Promise<void> {
-    await this.call((cb) => this.channel.utimes(target, atime, mtime, cb))
+    await this.call((cb) => this.channel.utimes(target, atime, mtime, cb), target)
   }
 
   createReadStream(
@@ -423,7 +523,7 @@ export class SftpSession extends EventEmitter {
     target: string,
     flags: 'w' | 'a' = 'w'
   ): NodeJS.WritableStream & { destroy: (err?: Error) => void } {
-    return this.channel.createWriteStream(target, { flags }) as NodeJS.WritableStream & {
+    return this.channel.createWriteStream(target, { flags, mode: 0o600 }) as NodeJS.WritableStream & {
       destroy: (err?: Error) => void
     }
   }

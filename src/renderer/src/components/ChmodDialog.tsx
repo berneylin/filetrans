@@ -32,6 +32,7 @@ export function ChmodDialog() {
   const setChmod = useUi((state) => state.setChmod)
   const [bits, setBits] = useState<PermissionBits>(modeToBits(0o644))
   const [octal, setOctal] = useState('644')
+  const [specialBits, setSpecialBits] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -40,6 +41,7 @@ export function ChmodDialog() {
     const mode = target.entries[0]?.mode ?? 0o644
     setBits(modeToBits(mode))
     setOctal(modeToOctal(mode))
+    setSpecialBits(mode & 0o7000)
     setError(null)
     setBusy(false)
   }, [target])
@@ -51,14 +53,17 @@ export function ChmodDialog() {
       ...bits,
       [group]: { ...bits[group], [perm]: !bits[group][perm] }
     }
+    const mode = bitsToMode(next) | specialBits
     setBits(next)
-    setOctal(modeToOctal(bitsToMode(next)))
+    setOctal(modeToOctal(mode))
   }
 
   const onOctalChange = (value: string): void => {
     setOctal(value)
     try {
-      setBits(modeToBits(octalToMode(value)))
+      const mode = octalToMode(value)
+      setBits(modeToBits(mode))
+      setSpecialBits(mode & 0o7000)
       setError(null)
     } catch {
       /* 输入过程中允许暂时无效 */

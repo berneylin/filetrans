@@ -21,8 +21,16 @@ import { paneRefresh, readPane } from './pane'
 
 export default function App() {
   const [split, setSplit] = useState(50)
+  const [dataIssues, setDataIssues] = useState<string[]>([])
   const dragging = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    void window.api.sites
+      .dataIssues()
+      .then((issues) => setDataIssues(issues))
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     const offHostKey = window.api.events.onHostKeyPrompt((prompt) =>
@@ -87,18 +95,39 @@ export default function App() {
     const onUp = (): void => {
       dragging.current = false
       document.body.style.cursor = ''
+      document.body.style.userSelect = ''
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
     }
   }, [])
 
   return (
     <div className="flex h-full flex-col">
       <Toolbar />
+      {dataIssues.length > 0 && (
+        <div className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-700">
+          <div className="min-w-0 flex-1">
+            {dataIssues.map((issue) => (
+              <div key={issue} className="truncate" title={issue}>
+                {issue}
+              </div>
+            ))}
+          </div>
+          <button
+            className="shrink-0 text-red-500 hover:text-red-700"
+            title="知道了"
+            onClick={() => setDataIssues([])}
+          >
+            知道了
+          </button>
+        </div>
+      )}
       <TabBar />
       <div ref={containerRef} className="flex min-h-0 flex-1">
         <div className="flex min-w-0" style={{ width: `${split}%` }}>
@@ -109,6 +138,7 @@ export default function App() {
           onMouseDown={() => {
             dragging.current = true
             document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
           }}
         />
         <div className="flex min-w-0 flex-1">
