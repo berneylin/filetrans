@@ -1,5 +1,6 @@
 {
   "name": "filetrans",
+  "productName": "FileTrans",
   "version": "0.1.0",
   "description": "基于 SSH/SFTP 的双栏文件传输客户端",
   "author": {

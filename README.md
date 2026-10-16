@@ -21,6 +21,7 @@
 | symlink | 范围内 → 重建链接并重映射目标；范围外 → 解引用复制；悬空 → 原样保留；环防护 |
 | 站点 | 密码/密钥认证、默认远程路径、safeStorage 加密保存密码、Host Key TOFU 信任 |
 | 安全 | contextIsolation + preload 白名单 IPC，渲染层无 Node 权限 |
+| 系统托盘 | 关闭窗口最小化到托盘（macOS 为黑色模板图自适应菜单栏明暗，Linux/Ubuntu 为彩色图标），后台继续传输；托盘菜单「显示 FileTrans / 退出 FileTrans」，退出前有进行中任务确认；托盘创建失败时回退为关闭即退出 |
 
 ## 技术栈
 

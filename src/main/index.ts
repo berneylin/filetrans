@@ -3,6 +3,8 @@ import {
   BrowserWindow,
   dialog,
   Menu,
+  nativeImage,
+  Tray,
   type MenuItemConstructorOptions,
   type MessageBoxOptions
 } from 'electron'
@@ -10,14 +12,15 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { registerIpc } from './ipc'
+import trayColorIcon from '../../resources/tray.png?asset'
+import trayTemplateIcon from '../../resources/trayTemplate.png?asset'
 
 app.setName('FileTrans')
 
 type Bridge = ReturnType<typeof registerIpc>
 
 let mainWindow: BrowserWindow | null = null
-let forceClose = false
-let quitConfirmed = false
+let tray: Tray | null = null
 let quitPrompting = false
 let quitting = false
 
@@ -31,11 +34,36 @@ async function confirmStopWork(bridge: Bridge, confirmLabel: string): Promise<bo
     message: '有进行中的传输或同步任务',
     detail: '继续将取消这些任务，确定要继续吗？'
   }
-  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const parent = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null
   const { response } = parent
     ? await dialog.showMessageBox(parent, options)
     : await dialog.showMessageBox(options)
   return response === 0
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function createTray(): void {
+  const icon =
+    process.platform === 'darwin'
+      ? nativeImage.createFromPath(trayTemplateIcon)
+      : nativeImage.createFromPath(trayColorIcon)
+  if (process.platform === 'darwin') icon.setTemplateImage(true)
+  const menu = Menu.buildFromTemplate([
+    { label: '显示 FileTrans', click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: '退出 FileTrans', click: () => app.quit() }
+  ])
+  const instance = new Tray(icon)
+  instance.setToolTip('FileTrans')
+  instance.setContextMenu(menu)
+  if (process.platform !== 'darwin') instance.on('click', () => showMainWindow())
+  tray = instance
 }
 
 function createWindow(bridge: Bridge): void {
@@ -58,24 +86,12 @@ function createWindow(bridge: Bridge): void {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('close', (event) => {
-    if (quitting || forceClose || !bridge.hasActiveWork()) return
+    if (quitting || !tray) return
     event.preventDefault()
-    const target = mainWindow
-    if (!target) return
-    const darwin = process.platform === 'darwin'
-    void confirmStopWork(bridge, darwin ? '关闭窗口并取消任务' : '退出并取消任务').then(
-      async (ok) => {
-        if (!ok) return
-        if (darwin) await bridge.shutdown()
-        else quitConfirmed = true
-        forceClose = true
-        if (!target.isDestroyed()) target.close()
-      }
-    )
+    mainWindow?.hide()
   })
   mainWindow.on('closed', () => {
     mainWindow = null
-    forceClose = false
     if (process.platform === 'darwin') void bridge.disconnectAll()
   })
 
@@ -110,11 +126,7 @@ async function cleanupTempFiles(): Promise<void> {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  })
+  app.on('second-instance', () => showMainWindow())
 
   app.whenReady().then(() => {
     if (process.platform !== 'darwin') {
@@ -142,7 +154,7 @@ if (!app.requestSingleInstanceLock()) {
       quitPrompting = true
       void (async () => {
         try {
-          if (!quitConfirmed && !(await confirmStopWork(bridge, '退出并取消任务'))) return
+          if (!(await confirmStopWork(bridge, '退出并取消任务'))) return
           quitting = true
           await bridge.shutdown()
           app.exit(0)
@@ -152,14 +164,20 @@ if (!app.requestSingleInstanceLock()) {
       })()
     })
     createWindow(bridge)
+    try {
+      createTray()
+    } catch (error) {
+      console.error('创建系统托盘失败', error)
+    }
     void cleanupTempFiles()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow(bridge)
+      if (!mainWindow) createWindow(bridge)
+      else showMainWindow()
     })
   })
 }
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (!tray && process.platform !== 'darwin') app.quit()
 })
