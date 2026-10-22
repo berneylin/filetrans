@@ -143,7 +143,7 @@ npm run package:mac     # → dist.noindex/*.dmg
 Linux 桌面入口：
 
 ```bash
-node scripts/generate-icon.mjs      # 生成 build/icon.png
+node scripts/generate-icon.mjs      # 生成 build/icon.png 与 resources/tray*.png
 npm run package:linux
 npm run install:linux               # 安装到 ~/.local/opt/FileTrans，并生成唯一的应用列表入口
 ```

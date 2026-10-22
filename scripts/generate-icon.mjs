@@ -3,67 +3,135 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateSync } from 'node:zlib'
 
-const SIZE = 512
-const pixels = new Uint8Array(SIZE * SIZE * 4)
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const SUPERSAMPLE = 4
 
-function blend(x, y, r, g, b, a = 255) {
-  if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return
-  const i = (y * SIZE + x) * 4
-  const srcA = a / 255
-  const dstA = pixels[i + 3] / 255
-  const outA = srcA + dstA * (1 - srcA)
-  if (outA === 0) return
-  pixels[i] = Math.round((r * srcA + pixels[i] * dstA * (1 - srcA)) / outA)
-  pixels[i + 1] = Math.round((g * srcA + pixels[i + 1] * dstA * (1 - srcA)) / outA)
-  pixels[i + 2] = Math.round((b * srcA + pixels[i + 2] * dstA * (1 - srcA)) / outA)
-  pixels[i + 3] = Math.round(outA * 255)
+const ARROW_STROKES = [
+  [8, 3, 4, 7],
+  [4, 7, 8, 11],
+  [4, 7, 20, 7],
+  [16, 21, 20, 17],
+  [20, 17, 16, 13],
+  [20, 17, 4, 17]
+]
+
+const BLUE = [59, 130, 246]
+const INDIGO = [79, 70, 229]
+const WHITE = [255, 255, 255]
+const BLACK = [0, 0, 0]
+
+function clamp01(value) {
+  return value < 0 ? 0 : value > 1 ? 1 : value
 }
 
-function roundedRect(x0, y0, x1, y1, radius, color) {
-  const [r, g, b, a = 255] = color
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const cx = x < x0 + radius ? x0 + radius : x >= x1 - radius ? x1 - radius - 1 : x
-      const cy = y < y0 + radius ? y0 + radius : y >= y1 - radius ? y1 - radius - 1 : y
-      const dx = x - cx
-      const dy = y - cy
-      if (dx * dx + dy * dy > radius * radius) continue
-      blend(x, y, r, g, b, a)
+function lerpColor(from, to, t) {
+  return [
+    from[0] + (to[0] - from[0]) * t,
+    from[1] + (to[1] - from[1]) * t,
+    from[2] + (to[2] - from[2]) * t
+  ]
+}
+
+function createCanvas(size) {
+  const width = size * SUPERSAMPLE
+  return { size, width, data: new Float64Array(width * width * 4) }
+}
+
+function writePixel(canvas, x, y, color) {
+  const index = (y * canvas.width + x) * 4
+  canvas.data[index] = color[0] / 255
+  canvas.data[index + 1] = color[1] / 255
+  canvas.data[index + 2] = color[2] / 255
+  canvas.data[index + 3] = 1
+}
+
+function paintRoundedRect(canvas, x0, y0, x1, y1, radius, colorAt) {
+  const scale = SUPERSAMPLE
+  const startX = Math.max(0, Math.floor(x0 * scale))
+  const startY = Math.max(0, Math.floor(y0 * scale))
+  const endX = Math.min(canvas.width, Math.ceil(x1 * scale))
+  const endY = Math.min(canvas.width, Math.ceil(y1 * scale))
+  for (let y = startY; y < endY; y++) {
+    const py = (y + 0.5) / scale
+    for (let x = startX; x < endX; x++) {
+      const px = (x + 0.5) / scale
+      const cx = Math.min(Math.max(px, x0 + radius), x1 - radius)
+      const cy = Math.min(Math.max(py, y0 + radius), y1 - radius)
+      if ((px - cx) ** 2 + (py - cy) ** 2 > radius ** 2) continue
+      writePixel(canvas, x, y, colorAt(px, py))
     }
   }
 }
 
-function rect(x0, y0, x1, y1, color) {
-  roundedRect(x0, y0, x1, y1, 0, color)
+function distanceToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const lengthSquared = dx * dx + dy * dy
+  const t = lengthSquared === 0 ? 0 : clamp01(((px - x1) * dx + (py - y1) * dy) / lengthSquared)
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 }
 
-const BLUE = [37, 99, 235]
-const PANEL = [255, 255, 255, 235]
-const LINE = [147, 168, 210]
-const ARROW = [255, 255, 255]
-
-roundedRect(8, 8, SIZE - 8, SIZE - 8, 96, BLUE)
-
-roundedRect(52, 96, 232, 416, 18, PANEL)
-roundedRect(280, 96, 460, 416, 18, PANEL)
-
-for (const [x0, x1] of [
-  [52, 232],
-  [280, 460]
-]) {
-  rect(x0 + 16, 120, x1 - 16, 146, [59, 130, 246, 255])
-  for (let row = 0; row < 3; row++) {
-    const y = 180 + row * 64
-    rect(x0 + 16, y, x1 - 16 - (row === 1 ? 36 : 0), y + 16, LINE)
-    rect(x0 + 16, y + 24, x1 - 60, y + 32, [200, 212, 232])
+function paintCapsule(canvas, x1, y1, x2, y2, width, color) {
+  const scale = SUPERSAMPLE
+  const radius = width / 2
+  const startX = Math.max(0, Math.floor((Math.min(x1, x2) - radius) * scale))
+  const startY = Math.max(0, Math.floor((Math.min(y1, y2) - radius) * scale))
+  const endX = Math.min(canvas.width, Math.ceil((Math.max(x1, x2) + radius) * scale))
+  const endY = Math.min(canvas.width, Math.ceil((Math.max(y1, y2) + radius) * scale))
+  for (let y = startY; y < endY; y++) {
+    const py = (y + 0.5) / scale
+    for (let x = startX; x < endX; x++) {
+      const px = (x + 0.5) / scale
+      if (distanceToSegment(px, py, x1, y1, x2, y2) > radius) continue
+      writePixel(canvas, x, y, color)
+    }
   }
 }
 
-rect(238, 244, 262, 268, ARROW)
-for (let i = 0; i <= 24; i++) {
-  const x = 262 + i
-  const half = 24 - i
-  rect(x, 256 - half, x + 1, 256 + half, ARROW)
+function paintArrowMark(canvas, center, scale, stroke, color) {
+  for (const [x1, y1, x2, y2] of ARROW_STROKES) {
+    paintCapsule(
+      canvas,
+      center + (x1 - 12) * scale,
+      center + (y1 - 12) * scale,
+      center + (x2 - 12) * scale,
+      center + (y2 - 12) * scale,
+      stroke * scale,
+      color
+    )
+  }
+}
+
+function toRgba(canvas) {
+  const { size, width, data } = canvas
+  const samples = SUPERSAMPLE * SUPERSAMPLE
+  const rgba = new Uint8Array(size * size * 4)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let red = 0
+      let green = 0
+      let blue = 0
+      let alpha = 0
+      for (let sy = 0; sy < SUPERSAMPLE; sy++) {
+        for (let sx = 0; sx < SUPERSAMPLE; sx++) {
+          const index = ((y * SUPERSAMPLE + sy) * width + x * SUPERSAMPLE + sx) * 4
+          const a = data[index + 3]
+          red += data[index] * a
+          green += data[index + 1] * a
+          blue += data[index + 2] * a
+          alpha += a
+        }
+      }
+      const index = (y * size + x) * 4
+      if (alpha > 0) {
+        rgba[index] = Math.round((red / alpha) * 255)
+        rgba[index + 1] = Math.round((green / alpha) * 255)
+        rgba[index + 2] = Math.round((blue / alpha) * 255)
+      }
+      rgba[index + 3] = Math.round((alpha / samples) * 255)
+    }
+  }
+  return rgba
 }
 
 const crcTable = (() => {
@@ -91,31 +159,56 @@ function chunk(type, data) {
   return Buffer.concat([length, typeBuffer, data, crc])
 }
 
-const raw = Buffer.alloc(SIZE * (SIZE * 4 + 1))
-for (let y = 0; y < SIZE; y++) {
-  raw[y * (SIZE * 4 + 1)] = 0
-  Buffer.from(pixels.buffer, y * SIZE * 4, SIZE * 4).copy(raw, y * (SIZE * 4 + 1) + 1)
+function encodePng(size, rgba) {
+  const raw = Buffer.alloc(size * (size * 4 + 1))
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 4 + 1)] = 0
+    Buffer.from(rgba.buffer, y * size * 4, size * 4).copy(raw, y * (size * 4 + 1) + 1)
+  }
+
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(size, 0)
+  ihdr.writeUInt32BE(size, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  ihdr[10] = 0
+  ihdr[11] = 0
+  ihdr[12] = 0
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0))
+  ])
 }
 
-const ihdr = Buffer.alloc(13)
-ihdr.writeUInt32BE(SIZE, 0)
-ihdr.writeUInt32BE(SIZE, 4)
-ihdr[8] = 8
-ihdr[9] = 6
-ihdr[10] = 0
-ihdr[11] = 0
-ihdr[12] = 0
+function writeIcon(file, canvas) {
+  const target = path.join(ROOT, file)
+  mkdirSync(path.dirname(target), { recursive: true })
+  const png = encodePng(canvas.size, toRgba(canvas))
+  writeFileSync(target, png)
+  console.log(`icon written: ${target} (${png.length} bytes)`)
+}
 
-const png = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  chunk('IHDR', ihdr),
-  chunk('IDAT', deflateSync(raw, { level: 9 })),
-  chunk('IEND', Buffer.alloc(0))
-])
+const appIcon = createCanvas(512)
+paintRoundedRect(appIcon, 8, 8, 504, 504, 112, (px, py) =>
+  lerpColor(BLUE, INDIGO, clamp01(((px - 8) / 496 + (py - 8) / 496) / 2))
+)
+paintArrowMark(appIcon, 256, 17, 2.25, WHITE)
+writeIcon('build/icon.png', appIcon)
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const outDir = path.join(root, 'build')
-mkdirSync(outDir, { recursive: true })
-const outFile = path.join(outDir, 'icon.png')
-writeFileSync(outFile, png)
-console.log(`icon written: ${outFile} (${png.length} bytes)`)
+const trayIcon = createCanvas(32)
+paintRoundedRect(trayIcon, 1, 1, 31, 31, 7, (px, py) =>
+  lerpColor(BLUE, INDIGO, clamp01(((px - 1) / 30 + (py - 1) / 30) / 2))
+)
+paintArrowMark(trayIcon, 16, 1, 2.35, WHITE)
+writeIcon('resources/tray.png', trayIcon)
+
+const trayTemplate = createCanvas(16)
+paintArrowMark(trayTemplate, 8, 0.74, 2.4, BLACK)
+writeIcon('resources/trayTemplate.png', trayTemplate)
+
+const trayTemplateRetina = createCanvas(32)
+paintArrowMark(trayTemplateRetina, 16, 1.48, 2.4, BLACK)
+writeIcon('resources/trayTemplate@2x.png', trayTemplateRetina)
