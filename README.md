@@ -21,6 +21,7 @@
 | symlink | 范围内 → 重建链接并重映射目标；范围外 → 解引用复制；悬空 → 原样保留；环防护 |
 | 站点 | 密码/密钥认证、默认远程路径、safeStorage 加密保存密码、Host Key TOFU 信任 |
 | 安全 | contextIsolation + preload 白名单 IPC，渲染层无 Node 权限 |
+| 外观 | 浅色 / 深色 / 跟随系统三种主题（顶栏右侧切换，重启后保留）；同步设置 Electron `nativeTheme`，macOS 标题栏与系统对话框随之切换；文件按扩展名显示类型图标 |
 | 系统托盘 | 关闭窗口最小化到托盘（macOS 为黑色模板图自适应菜单栏明暗，Linux/Ubuntu 为彩色图标），后台继续传输；托盘菜单「显示 FileTrans / 退出 FileTrans」，退出前有进行中任务确认；托盘创建失败时回退为关闭即退出 |
 
 ## 技术栈
@@ -79,6 +80,7 @@ scripts/                   # 图标生成、桌面入口安装、启动器
 | `~/.config/FileTrans/known-hosts.json` | 已信任的 Host Key 指纹 |
 | localStorage `filetrans-transfer-settings` | 续传/重试/时间戳/权限等传输选项 |
 | localStorage `filetrans-queue-height` | 传输队列面板高度 |
+| localStorage `filetrans-theme` | 主题（跟随系统/浅色/深色） |
 
 > `app.setName('FileTrans')` 必须在 `app.whenReady()` 之前调用，否则数据会落到 `~/.config/Electron`。
 

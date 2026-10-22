@@ -32,12 +32,13 @@ export function TransferSettingsDialog({ onClose }: Props) {
 
   return (
     <Modal title="传输设置" onClose={onClose} width={420}>
-      <div className="space-y-2">
+      <div className="space-y-3">
+        <div className="text-[12px] font-medium text-ui-500">传输</div>
         <label className="flex items-start gap-2">
-          <input type="checkbox" checked={resume} onChange={(e) => setResume(e.target.checked)} />
+          <input type="checkbox" className="mt-0.5" checked={resume} onChange={(e) => setResume(e.target.checked)} />
           <span>
             断点续传
-            <span className="block text-gray-500">
+            <span className="block text-[12px] text-ui-500">
               同名文件已存在时从断点继续；传输失败后自动从已写入位置重试
             </span>
           </span>
@@ -59,7 +60,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
         <label className="flex items-start gap-2">
           <span>
             单文件并行下载数
-            <span className="block text-gray-500">
+            <span className="block text-[12px] text-ui-500">
               1-16，仅对大文件生效；1 表示关闭并行
             </span>
           </span>
@@ -72,7 +73,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
         <label className="flex items-start gap-2">
           <span>
             同时传输文件数
-            <span className="block text-gray-500">1-8，多个文件并行传输</span>
+            <span className="block text-[12px] text-ui-500">1-8，多个文件并行传输</span>
           </span>
           <input
             className={`${dialogInput} ml-auto w-16`}
@@ -96,8 +97,8 @@ export function TransferSettingsDialog({ onClose }: Props) {
           />
           保留权限
         </label>
-        <div className="mt-4 space-y-2 border-t border-gray-200 pt-3">
-          <div className="text-gray-700">目录同步 (rsync)</div>
+        <div className="mt-4 space-y-2 border-t border-ui-100 pt-3">
+          <div className="text-[12px] font-medium text-ui-500">目录同步 (rsync)</div>
           <label className="block">
             <span>禁用同步目录</span>
             <textarea
@@ -106,7 +107,7 @@ export function TransferSettingsDialog({ onClose }: Props) {
               onChange={(e) => setSyncBannedPaths(e.target.value)}
               placeholder="每行一个目录，如 /home/sunqy/repos"
             />
-            <span className="mt-1 block text-gray-500">
+            <span className="mt-1 block text-[12px] text-ui-500">
               每行一个目录；仅校验同步的起止目录本身，路径结尾的 / 会被忽略。
             </span>
           </label>

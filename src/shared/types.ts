@@ -1,5 +1,7 @@
 export type EntryType = 'file' | 'directory' | 'symlink' | 'other'
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+
 export interface FileEntry {
   name: string
   path: string

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { TriangleAlert } from 'lucide-react'
 import { ChmodDialog } from './components/ChmodDialog'
 import { ConflictDialog } from './components/ConflictDialog'
 import { ContextMenu } from './components/ContextMenu'
@@ -111,7 +112,8 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Toolbar />
       {dataIssues.length > 0 && (
-        <div className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-700">
+        <div className="mx-2 mt-2 flex items-start gap-2 rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-[12px] text-red-700 dark:text-red-300">
+          <TriangleAlert size={14} className="mt-px shrink-0 text-red-500" />
           <div className="min-w-0 flex-1">
             {dataIssues.map((issue) => (
               <div key={issue} className="truncate" title={issue}>
@@ -120,7 +122,7 @@ export default function App() {
             ))}
           </div>
           <button
-            className="shrink-0 text-red-500 hover:text-red-700"
+            className="shrink-0 rounded px-1.5 font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 hover:text-red-800 dark:hover:text-red-200"
             title="知道了"
             onClick={() => setDataIssues([])}
           >
@@ -129,23 +131,27 @@ export default function App() {
         </div>
       )}
       <TabBar />
-      <div ref={containerRef} className="flex min-h-0 flex-1">
-        <div className="flex min-w-0" style={{ width: `${split}%` }}>
-          <FilePane side="local" />
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
+        <div ref={containerRef} className="flex min-h-0 flex-1">
+          <div className="flex min-w-0" style={{ width: `${split}%` }}>
+            <FilePane side="local" />
+          </div>
+          <div
+            className="group flex w-2 shrink-0 cursor-col-resize justify-center"
+            onMouseDown={() => {
+              dragging.current = true
+              document.body.style.cursor = 'col-resize'
+              document.body.style.userSelect = 'none'
+            }}
+          >
+            <div className="my-3 w-0.5 rounded-full transition-colors group-hover:bg-blue-400" />
+          </div>
+          <div className="flex min-w-0 flex-1">
+            <FilePane side="remote" />
+          </div>
         </div>
-        <div
-          className="w-1 cursor-col-resize border-x border-gray-300 bg-gray-200 hover:bg-blue-400"
-          onMouseDown={() => {
-            dragging.current = true
-            document.body.style.cursor = 'col-resize'
-            document.body.style.userSelect = 'none'
-          }}
-        />
-        <div className="flex min-w-0 flex-1">
-          <FilePane side="remote" />
-        </div>
+        <TransferPanel />
       </div>
-      <TransferPanel />
       <StatusBar />
       <SiteManagerDialog />
       <SyncDialog />

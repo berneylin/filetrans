@@ -9,7 +9,7 @@ import {
   type MouseEvent
 } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { File as FileIcon, Folder, Link2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, CornerLeftUp, Folder, Inbox, Link2, LoaderCircle } from 'lucide-react'
 import { formatDate, formatSize, modeToPermissionString } from '@shared/format'
 import type { FileEntry } from '@shared/types'
 import { activateEntry, commitRename, finishRename, openContextMenu } from '../actions'
@@ -28,6 +28,7 @@ import {
 } from '../stores/columns'
 import { useUi } from '../stores/ui'
 import type { PaneSide, SortKey } from '../types'
+import { FILE_ICONS, fileKind } from '../utils/fileIcon'
 
 const TYPE_LABELS: Record<string, string> = {
   directory: '文件夹',
@@ -51,6 +52,16 @@ function parentEntry(parentPath: string): FileEntry {
   }
 }
 
+function EntryIcon({ entry, isParent }: { entry: FileEntry; isParent: boolean }) {
+  if (isParent) return <CornerLeftUp size={14} className="shrink-0 text-ui-400" />
+  if (entry.type === 'directory') {
+    return <Folder size={15} className="shrink-0 fill-amber-200 dark:fill-amber-400/30 text-amber-500" />
+  }
+  if (entry.isSymlink) return <Link2 size={14} className="shrink-0 text-sky-500" />
+  const { icon: Icon, className } = FILE_ICONS[fileKind(entry.name)]
+  return <Icon size={14} className={`shrink-0 ${className}`} />
+}
+
 function HeaderCell({
   side,
   sortKey,
@@ -69,19 +80,24 @@ function HeaderCell({
   const pane = usePane(side)
   const active = pane.sortKey === sortKey
   return (
-    <div className="relative flex min-w-0 items-center border-r border-gray-300 last:border-r-0">
+    <div className="relative flex min-w-0 items-center after:absolute after:top-1.5 after:right-0 after:bottom-1.5 after:w-px after:bg-ui-200 last:after:hidden">
       <button
-        className={`flex min-w-0 flex-1 items-center truncate whitespace-nowrap px-2 hover:text-blue-700 ${
+        className={`flex h-full min-w-0 flex-1 items-center gap-0.5 truncate whitespace-nowrap px-2 transition-colors hover:text-ui-800 ${
           align === 'right' ? 'justify-end' : ''
-        } ${active ? 'font-semibold text-gray-800' : ''}`}
+        } ${active ? 'font-medium text-blue-600 dark:text-blue-400' : ''}`}
         onClick={() => paneSetSort(side, sortKey)}
         title={`按${label}排序`}
       >
-        {label}
-        {active && <span className="ml-0.5 text-[10px]">{pane.sortAsc ? '▲' : '▼'}</span>}
+        <span className="truncate">{label}</span>
+        {active &&
+          (pane.sortAsc ? (
+            <ChevronUp size={12} className="shrink-0" />
+          ) : (
+            <ChevronDown size={12} className="shrink-0" />
+          ))}
       </button>
       <div
-        className="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize border-r border-transparent hover:border-blue-500 hover:bg-blue-300/50"
+        className="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize rounded-sm hover:bg-blue-400/40"
         title="拖动调整列宽，双击恢复默认"
         onMouseDown={(event) => onResizeStart(event, sortKey)}
         onDoubleClick={() => onReset(sortKey)}
@@ -122,7 +138,7 @@ function RenameInput({
   return (
     <input
       autoFocus
-      className="h-5 w-full min-w-0 rounded border border-blue-500 bg-white px-1 text-[13px] text-gray-900 outline-none"
+      className="h-5 w-full min-w-0 rounded border border-blue-500 bg-ui-0 px-1 text-[13px] text-ui-900 outline-none ring-2 ring-blue-500/20"
       value={value}
       onFocus={(event) => event.target.select()}
       onChange={(event) => setValue(event.target.value)}
@@ -356,7 +372,7 @@ export function FileTable({ side }: { side: PaneSide }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        className="grid w-full overflow-hidden border-b border-gray-300 bg-gray-100 text-gray-600"
+        className="grid h-7 w-full shrink-0 overflow-hidden border-b border-ui-200 bg-ui-0 text-[12px] text-ui-500"
         style={{ gridTemplateColumns: template }}
       >
         <HeaderCell
@@ -399,7 +415,7 @@ export function FileTable({ side }: { side: PaneSide }) {
       <div
         ref={scrollRef}
         tabIndex={0}
-        className="min-h-0 flex-1 overflow-auto bg-white outline-none"
+        className="min-h-0 flex-1 overflow-auto bg-ui-0 outline-none"
         onKeyDown={onListKeyDown}
         onClick={(event) => {
           if (!(event.target as HTMLElement).closest('[data-row]')) {
@@ -414,8 +430,13 @@ export function FileTable({ side }: { side: PaneSide }) {
         }}
       >
         {rows.length === 0 ? (
-          <div className="p-6 text-center text-gray-400">
-            {pane.loading ? '加载中…' : '目录为空'}
+          <div className="flex flex-col items-center gap-2 p-10 text-ui-400">
+            {pane.loading ? (
+              <LoaderCircle size={22} className="animate-spin text-ui-300" />
+            ) : (
+              <Inbox size={26} strokeWidth={1.5} className="text-ui-300" />
+            )}
+            <span>{pane.loading ? '加载中…' : '目录为空'}</span>
           </div>
         ) : (
           <div
@@ -438,10 +459,8 @@ export function FileTable({ side }: { side: PaneSide }) {
                   draggable={!isParent && !isRenaming}
                   className={`grid absolute left-0 top-0 h-6 w-full items-center cursor-default ${
                     isSelected
-                      ? 'bg-blue-600 text-white'
-                      : virtualRow.index % 2 === 1
-                        ? 'bg-gray-50 hover:bg-blue-50'
-                        : 'hover:bg-blue-50'
+                      ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-950 dark:text-blue-50 shadow-[inset_2px_0_0_#3b82f6]'
+                      : 'text-ui-700 hover:bg-ui-50'
                   }`}
                   style={{
                     transform: `translateY(${virtualRow.start}px)`,
@@ -480,25 +499,13 @@ export function FileTable({ side }: { side: PaneSide }) {
                     event.dataTransfer.effectAllowed = 'copy'
                   }}
                 >
-                  <div className="flex min-w-0 items-center gap-1.5 px-2">
-                    {entry.type === 'directory' ? (
-                      <Folder
-                        size={14}
-                        className={`shrink-0 ${isParent ? 'text-gray-400' : 'text-amber-500'}`}
-                      />
-                    ) : entry.isSymlink ? (
-                      <Link2 size={14} className="shrink-0 text-sky-500" />
-                    ) : (
-                      <FileIcon
-                        size={14}
-                        className={`shrink-0 ${isSelected ? 'text-white' : 'text-gray-400'}`}
-                      />
-                    )}
+                  <div className="flex min-w-0 items-center gap-2 px-2">
+                    <EntryIcon entry={entry} isParent={isParent} />
                     {isRenaming ? (
                       <RenameInput target={entry.path} initial={entry.name} side={side} />
                     ) : (
                       <span
-                        className={`truncate ${isParent ? 'text-gray-500' : ''}`}
+                        className={`truncate ${isParent ? 'text-ui-400' : ''}`}
                         title={entry.name}
                       >
                         {entry.name}
@@ -506,19 +513,29 @@ export function FileTable({ side }: { side: PaneSide }) {
                     )}
                   </div>
                   <div
-                    className="min-w-0 truncate px-2 text-right tabular-nums"
+                    className={`min-w-0 truncate px-2 text-right tabular-nums ${
+                      isSelected ? '' : 'text-ui-600'
+                    }`}
                     title={entry.type === 'directory' ? undefined : formatSize(entry.size)}
                   >
                     {entry.type === 'directory' ? '' : formatSize(entry.size)}
                   </div>
-                  <div className="min-w-0 truncate px-2" title={TYPE_LABELS[entry.type]}>
+                  <div
+                    className={`min-w-0 truncate px-2 ${isSelected ? '' : 'text-ui-500'}`}
+                    title={TYPE_LABELS[entry.type]}
+                  >
                     {TYPE_LABELS[entry.type]}
                   </div>
-                  <div className="min-w-0 truncate px-2 tabular-nums" title={formatDate(entry.mtime)}>
+                  <div
+                    className={`min-w-0 truncate px-2 tabular-nums ${isSelected ? '' : 'text-ui-600'}`}
+                    title={formatDate(entry.mtime)}
+                  >
                     {formatDate(entry.mtime)}
                   </div>
                   <div
-                    className={`min-w-0 truncate px-2 font-mono ${isParent ? 'text-gray-400' : ''}`}
+                    className={`min-w-0 truncate px-2 font-mono text-[11.5px] ${
+                      isSelected ? '' : 'text-ui-500'
+                    }`}
                     title={isParent ? undefined : modeToPermissionString(entry.mode)}
                   >
                     {isParent ? '' : modeToPermissionString(entry.mode)}

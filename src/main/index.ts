@@ -4,6 +4,7 @@ import {
   dialog,
   Menu,
   nativeImage,
+  nativeTheme,
   Tray,
   type MenuItemConstructorOptions,
   type MessageBoxOptions
@@ -74,6 +75,7 @@ function createWindow(bridge: Bridge): void {
     minHeight: 620,
     title: 'FileTrans',
     show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0d1117' : '#eef1f5',
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

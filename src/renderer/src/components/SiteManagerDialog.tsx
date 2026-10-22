@@ -5,6 +5,7 @@ import { useTabs } from '../stores/tabs'
 import { useUi } from '../stores/ui'
 import { errorMessage } from '../utils/errors'
 import { nextSiteName } from '../utils/sites'
+import { Plus, Server } from 'lucide-react'
 import { btn, btnDanger, btnPrimary, dialogInput } from '../utils/styles'
 import { Modal } from './Modal'
 
@@ -41,7 +42,7 @@ function emptyForm(): FormState {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="grid grid-cols-[90px_1fr] items-center gap-2">
-      <span className="text-right text-gray-600">{label}</span>
+      <span className="text-right text-ui-500">{label}</span>
       {children}
     </label>
   )
@@ -219,32 +220,47 @@ export function SiteManagerDialog() {
   return (
     <Modal title="站点管理器" onClose={() => setOpen(false)} width={700}>
       <div className="flex gap-3">
-        <div className="flex w-52 flex-col border-r border-gray-200 pr-3">
-          <div className="mb-1 font-semibold text-gray-700">站点列表</div>
-          <div className="max-h-72 flex-1 overflow-auto rounded border border-gray-200">
+        <div className="flex w-56 flex-col">
+          <div className="mb-1.5 text-[12px] font-medium text-ui-500">站点列表</div>
+          <div className="max-h-80 min-h-40 flex-1 space-y-0.5 overflow-auto rounded-lg border border-ui-200 bg-ui-50/60 p-1">
             {sites.length === 0 ? (
-              <div className="p-2 text-gray-400">暂无站点</div>
+              <div className="flex h-full flex-col items-center justify-center gap-1.5 p-4 text-ui-400">
+                <Server size={20} strokeWidth={1.5} className="text-ui-300" />
+                暂无站点
+              </div>
             ) : (
               sites.map((site) => (
                 <button
                   key={site.id}
-                  className={`block w-full truncate px-2 py-1 text-left ${
-                    form.id === site.id ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                    form.id === site.id
+                      ? 'bg-ui-0 text-blue-700 dark:text-blue-300 shadow-sm ring-1 ring-blue-200 dark:ring-blue-500/40'
+                      : 'text-ui-700 hover:bg-ui-0'
                   }`}
                   onClick={() => selectSite(site)}
                   title={`${site.username}@${site.host}:${site.port}`}
                 >
-                  {site.name}
+                  <Server
+                    size={14}
+                    className={`shrink-0 ${form.id === site.id ? 'text-blue-500' : 'text-ui-400'}`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{site.name}</span>
+                    <span className="block truncate text-[11px] text-ui-400">
+                      {site.username}@{site.host}
+                    </span>
+                  </span>
                 </button>
               ))
             )}
           </div>
           <button className={`${btn} mt-2`} disabled={busy} onClick={handleNew}>
+            <Plus size={13} className="text-ui-500" />
             新建站点
           </button>
         </div>
 
-        <div className="flex-1 space-y-2">
+        <div className="flex-1 space-y-2.5 border-l border-ui-100 pl-4">
           <Field label="名称">
             <input
               ref={nameInputRef}
@@ -253,14 +269,14 @@ export function SiteManagerDialog() {
               onChange={(event) => patch({ name: event.target.value })}
             />
           </Field>
-          <div className="grid grid-cols-[90px_minmax(0,1fr)_90px_80px] items-center gap-2">
-            <span className="text-right text-gray-600">主机</span>
+          <div className="grid grid-cols-[90px_minmax(0,1fr)_auto_80px] items-center gap-2">
+            <span className="text-right text-ui-500">主机</span>
             <input
               className={dialogInput}
               value={form.host}
               onChange={(event) => patch({ host: event.target.value })}
             />
-            <span className="text-right text-gray-600">端口</span>
+            <span className="text-right text-ui-500">端口</span>
             <input
               className={dialogInput}
               value={form.port}
@@ -330,7 +346,7 @@ export function SiteManagerDialog() {
               onChange={(event) => patch({ remotePath: event.target.value })}
             />
           </Field>
-          <label className="flex items-center gap-2 pl-[98px]">
+          <label className="flex items-center gap-2 pl-[98px] text-ui-700">
             <input
               type="checkbox"
               checked={form.rememberSecret && encryptionAvailable}
@@ -340,17 +356,19 @@ export function SiteManagerDialog() {
             记住密码/口令（使用系统密钥环加密）
           </label>
           {!encryptionAvailable && (
-            <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-700">
+            <div className="rounded-md border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-300">
               当前系统没有可用的密钥环，无法加密保存密码/口令，请取消勾选“记住密码”。
             </div>
           )}
           {dataIssues.map((issue) => (
-            <div key={issue} className="rounded border border-red-300 bg-red-50 p-2 text-red-700">
+            <div key={issue} className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-red-700 dark:text-red-300">
               {issue}
             </div>
           ))}
-          {error && <div className="text-red-600">{error}</div>}
-          <div className="flex justify-end gap-2 pt-1">
+          {error && (
+            <div className="rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-red-600 dark:text-red-400">{error}</div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
             {form.id && (
               <button className={btnDanger} disabled={busy} onClick={() => void handleDelete()}>
                 删除

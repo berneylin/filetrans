@@ -87,17 +87,19 @@ export function ChmodDialog() {
 
   return (
     <Modal title="更改权限" onClose={() => setChmod(null)} width={440}>
-      <div className="mb-2 text-gray-600">对象: {name}</div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="mb-3 truncate text-ui-600" title={name}>
+        对象: <span className="font-medium text-ui-800">{name}</span>
+      </div>
+      <div className="grid grid-cols-4 items-center gap-x-2 gap-y-2.5 rounded-lg border border-ui-200 bg-ui-50/60 px-3 py-3">
         <div />
         {(['read', 'write', 'execute'] as Perm[]).map((perm) => (
-          <div key={perm} className="text-center text-gray-500">
+          <div key={perm} className="text-center text-[12px] text-ui-500">
             {PERM_LABELS[perm]}
           </div>
         ))}
         {(['owner', 'group', 'other'] as Group[]).map((group) => (
           <div key={group} className="contents">
-            <div className="text-gray-600">{GROUP_LABELS[group]}</div>
+            <div className="text-ui-700">{GROUP_LABELS[group]}</div>
             {(['read', 'write', 'execute'] as Perm[]).map((perm) => (
               <div key={perm} className="flex justify-center">
                 <input
@@ -111,14 +113,14 @@ export function ChmodDialog() {
         ))}
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <label className="text-gray-600">八进制</label>
+        <label className="text-ui-600">八进制</label>
         <input
           className={`${dialogInput} w-24 font-mono`}
           value={octal}
           onChange={(event) => onOctalChange(event.target.value)}
         />
       </div>
-      {error && <div className="mt-2 text-red-600">{error}</div>}
+      {error && <div className="mt-2 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-red-600 dark:text-red-400">{error}</div>}
       <div className="mt-4 flex justify-end gap-2">
         <button className={btn} onClick={() => setChmod(null)}>
           取消

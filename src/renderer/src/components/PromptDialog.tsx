@@ -35,7 +35,7 @@ export function PromptDialog() {
 
   return (
     <Modal title={prompt.title} onClose={closePrompt} width={380}>
-      <label className="mb-1 block text-gray-600">{prompt.label}</label>
+      <label className="mb-1.5 block text-ui-600">{prompt.label}</label>
       <input
         autoFocus
         className={dialogInput}
@@ -46,8 +46,8 @@ export function PromptDialog() {
           if (event.key === 'Escape') closePrompt()
         }}
       />
-      {error && <div className="mt-2 text-red-600">{error}</div>}
-      <div className="mt-3 flex justify-end gap-2">
+      {error && <div className="mt-2 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-red-600 dark:text-red-400">{error}</div>}
+      <div className="mt-4 flex justify-end gap-2">
         <button className={btn} onClick={closePrompt}>
           取消
         </button>

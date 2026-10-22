@@ -10,6 +10,7 @@ import type {
   SiteInput,
   SyncJob,
   SyncStartRequest,
+  ThemeMode,
   TransferGroup,
   TransferStartRequest
 } from './types'
@@ -17,6 +18,7 @@ import type {
 export interface FileTransApi {
   pickFile(options?: { title?: string }): Promise<string | null>
   pickDirectory(options?: { title?: string }): Promise<string | null>
+  setTheme(mode: ThemeMode): Promise<void>
   getPathForFile(file: File): string
   local: {
     home(): Promise<string>

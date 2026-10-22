@@ -5,10 +5,10 @@ export function StatusBar() {
 
   const dotClass =
     tab?.status === 'connected'
-      ? 'bg-green-500'
+      ? 'bg-emerald-500 ring-2 ring-emerald-500/20'
       : tab?.status === 'connecting'
-        ? 'bg-amber-500'
-        : 'bg-gray-400'
+        ? 'bg-amber-500 animate-pulse'
+        : 'bg-ui-300'
 
   const text = !tab
     ? '未连接'
@@ -21,12 +21,12 @@ export function StatusBar() {
           : '未连接'
 
   return (
-    <div className="flex items-center gap-3 border-t border-gray-300 bg-gray-100 px-2 py-0.5 text-gray-600">
-      <span className="flex items-center gap-1.5">
-        <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
-        {text}
+    <div className="flex h-6 shrink-0 items-center gap-3 border-t border-ui-200 bg-ui-0 px-3 text-[11.5px] text-ui-500">
+      <span className="flex min-w-0 items-center gap-2">
+        <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+        <span className="truncate">{text}</span>
       </span>
-      <span className="ml-auto text-gray-400">FileTrans 0.1.0</span>
+      <span className="ml-auto shrink-0 text-ui-400">FileTrans 0.1.0</span>
     </div>
   )
 }

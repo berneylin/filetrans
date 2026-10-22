@@ -32,22 +32,22 @@ export function ContextMenu() {
       }}
     >
       <div
-        className="absolute min-w-[170px] rounded border border-gray-300 bg-white py-1 shadow-lg"
+        className="absolute min-w-[180px] animate-fade-in rounded-lg border border-ui-200 bg-ui-0 p-1 shadow-xl shadow-black/10"
         style={{ left, top }}
       >
         {menu.items.map((item, index) =>
           item.separator ? (
-            <div key={index} className="my-1 border-t border-gray-200" />
+            <div key={index} className="mx-1 my-1 h-px bg-ui-100" />
           ) : (
             <button
               key={index}
               disabled={item.disabled}
-              className={`block w-full px-3 py-1 text-left ${
+              className={`block w-full rounded-md px-2.5 py-1 text-left transition-colors ${
                 item.disabled
-                  ? 'cursor-not-allowed text-gray-400'
-                  : `hover:bg-blue-600 hover:text-white ${
-                      item.danger ? 'text-red-600 hover:text-white' : ''
-                    }`
+                  ? 'cursor-not-allowed text-ui-300'
+                  : item.danger
+                    ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10'
+                    : 'text-ui-700 hover:bg-blue-600 hover:text-white'
               }`}
               onClick={() => {
                 closeMenu()

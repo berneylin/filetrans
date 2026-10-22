@@ -1,5 +1,75 @@
 @import 'tailwindcss';
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-ui-0: #ffffff;
+  --color-ui-50: #f8fafc;
+  --color-ui-100: #f1f5f9;
+  --color-ui-200: #e2e8f0;
+  --color-ui-300: #cbd5e1;
+  --color-ui-400: #94a3b8;
+  --color-ui-500: #64748b;
+  --color-ui-600: #475569;
+  --color-ui-700: #334155;
+  --color-ui-800: #1e293b;
+  --color-ui-900: #0f172a;
+  --color-ui-950: #020617;
+
+  --animate-fade-in: fade-in 120ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+:root {
+  --ft-canvas: #eef1f5;
+  --ft-text: #1e293b;
+  --ft-selection: #bfdbfe;
+  --ft-scroll-thumb: #cbd5e1;
+  --ft-scroll-thumb-hover: #94a3b8;
+  color-scheme: light;
+}
+
+:root.dark {
+  --color-ui-0: #161b22;
+  --color-ui-50: #1b212a;
+  --color-ui-100: #222933;
+  --color-ui-200: #2b333f;
+  --color-ui-300: #3b4452;
+  --color-ui-400: #5c6878;
+  --color-ui-500: #8691a1;
+  --color-ui-600: #a1abb9;
+  --color-ui-700: #c0c8d3;
+  --color-ui-800: #dce2e9;
+  --color-ui-900: #e8edf2;
+  --color-ui-950: #f4f7fa;
+  --ft-canvas: #0d1117;
+  --ft-text: #dce2e9;
+  --ft-selection: rgb(59 130 246 / 0.4);
+  --ft-scroll-thumb: #3b4452;
+  --ft-scroll-thumb-hover: #5c6878;
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -11,11 +81,12 @@ body {
   overflow: hidden;
   font-size: 13px;
   line-height: 1.4;
-  color: #1f2937;
-  background: #f3f4f6;
+  color: var(--ft-text);
+  background: var(--ft-canvas);
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
   user-select: none;
 }
 
@@ -30,27 +101,46 @@ textarea {
   user-select: text;
 }
 
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: #2563eb;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgb(59 130 246 / 0.45);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--ft-selection);
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c4c8ce;
+  background: var(--ft-scroll-thumb);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a8adb5;
+  background: var(--ft-scroll-thumb-hover);
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f2f4;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-corner {
-  background: #f1f2f4;
+  background: transparent;
 }

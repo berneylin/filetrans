@@ -1,6 +1,6 @@
-import { dialog, ipcMain, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, nativeTheme, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { ConflictResolution, ConnectParams, SiteInput, SyncStartRequest, TransferStartRequest } from '@shared/types'
+import type { ConflictResolution, ConnectParams, SiteInput, SyncStartRequest, ThemeMode, TransferStartRequest } from '@shared/types'
 import * as localFs from './local/fs'
 import { SessionManager } from './sftp/manager'
 import { checkPrivateKey } from './sftp/session'
@@ -108,6 +108,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       properties: ['openFile']
     })
     return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+
+  ipcMain.handle(IPC.appSetTheme, (_event, mode: unknown) => {
+    const modes: ThemeMode[] = ['system', 'light', 'dark']
+    if (!modes.includes(mode as ThemeMode)) throw new Error('无效的主题')
+    nativeTheme.themeSource = mode as ThemeMode
   })
 
   ipcMain.handle(IPC.appPickDirectory, async (_event, options?: { title?: string }) => {

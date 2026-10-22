@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ConflictResolution } from '@shared/types'
 import { useSettings } from '../stores/settings'
 import { useTransfers } from '../stores/transfers'
-import { btn, btnPrimary } from '../utils/styles'
+import { btn, btnPrimary, optionCard, optionCardState } from '../utils/styles'
 import { Modal } from './Modal'
 
 const MAX_ITEMS = 8
@@ -43,14 +43,14 @@ export function ConflictDialog() {
       width={560}
       dismissible={false}
     >
-      <div className="text-gray-700">
+      <div className="text-ui-700">
         以下 {conflict.items.length} 个目标位置已存在同名文件：
         {conflicts.length > 1 && <span>（还有 {conflicts.length - 1} 个传输等待处理）</span>}
       </div>
-      <div className="mt-2 max-h-40 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 font-mono text-[12px]">
+      <div className="mt-2 max-h-40 overflow-auto rounded-md border border-ui-200 bg-ui-50 px-3 py-2 font-mono text-[12px] text-ui-700">
         {conflict.items.slice(0, MAX_ITEMS).map((item) => (
           <div key={item.targetPath} className="truncate" title={item.targetPath}>
-            <span className="mr-1 text-gray-500">
+            <span className="mr-1 text-ui-400">
               {item.partial
                 ? '[未完成]'
                 : item.type === 'directory'
@@ -63,17 +63,17 @@ export function ConflictDialog() {
           </div>
         ))}
         {conflict.items.length > MAX_ITEMS && (
-          <div className="text-gray-500">…等共 {conflict.items.length} 项</div>
+          <div className="text-ui-400">…等共 {conflict.items.length} 项</div>
         )}
       </div>
       {resolution === 'overwrite' && conflict.items.some((item) => item.type === 'directory') && (
-        <div className="mt-2 text-[12px] text-red-600">
+        <div className="mt-2 rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-1.5 text-[12px] text-red-600 dark:text-red-400">
           覆盖将递归删除{overwriteTarget}同名目录及其全部内容，请确认。
         </div>
       )}
-      <div className="mt-3 space-y-1">
+      <div className="mt-3 space-y-1.5">
         {resumeEnabled && (
-          <label className="flex items-center gap-2">
+          <label className={`${optionCard} ${optionCardState(resolution === 'resume')}`}>
             <input
               type="radio"
               checked={resolution === 'resume'}
@@ -82,7 +82,7 @@ export function ConflictDialog() {
             续传（从断点继续，已完整的文件跳过）
           </label>
         )}
-        <label className="flex items-center gap-2">
+        <label className={`${optionCard} ${optionCardState(resolution === 'overwrite')}`}>
           <input
             type="radio"
             checked={resolution === 'overwrite'}
@@ -90,7 +90,7 @@ export function ConflictDialog() {
           />
           覆盖已有文件
         </label>
-        <label className="flex items-center gap-2">
+        <label className={`${optionCard} ${optionCardState(resolution === 'skip')}`}>
           <input
             type="radio"
             checked={resolution === 'skip'}

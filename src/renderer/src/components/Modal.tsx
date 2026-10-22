@@ -72,7 +72,7 @@ export function Modal({ title, onClose, children, width = 480, dismissible = tru
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
+      className="fixed inset-0 z-40 flex animate-fade-in items-center justify-center bg-black/40 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         pressedOnBackdrop.current = event.target === event.currentTarget
       }}
@@ -89,24 +89,24 @@ export function Modal({ title, onClose, children, width = 480, dismissible = tru
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="rounded border border-gray-300 bg-white shadow-xl outline-none"
+        className="flex max-h-[90vh] max-w-[calc(100vw-32px)] animate-pop-in flex-col overflow-hidden rounded-xl border border-ui-200 bg-ui-0 shadow-2xl shadow-black/20 outline-none"
         style={{ width }}
         onMouseDown={(event) => {
           event.stopPropagation()
           pressedOnBackdrop.current = false
         }}
       >
-        <div className="flex items-center justify-between border-b border-gray-200 bg-gray-100 px-3 py-2 text-[13px] font-semibold">
-          {title}
+        <div className="flex shrink-0 items-center justify-between border-b border-ui-100 px-4 py-2.5">
+          <span className="text-[14px] font-semibold text-ui-800">{title}</span>
           <button
-            className="text-gray-400 hover:text-gray-600"
+            className="-mr-1.5 flex h-7 w-7 items-center justify-center rounded-md text-ui-400 transition-colors hover:bg-ui-100 hover:text-ui-700"
             title="关闭"
             onClick={onClose}
           >
-            <X size={14} />
+            <X size={15} />
           </button>
         </div>
-        <div ref={bodyRef} className="p-3 outline-none">
+        <div ref={bodyRef} className="min-h-0 overflow-auto p-4 outline-none">
           {children}
         </div>
       </div>

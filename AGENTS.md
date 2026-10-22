@@ -12,6 +12,7 @@ FileTrans：Electron + React + TypeScript 的双栏 SSH/SFTP 文件传输客户�
    - 仅当用户明确在跑 `npm run dev`（HMR 开发模式）时才可跳过打包。
 2. 改动后至少运行 `npm run typecheck && npm test`，两者都必须通过。
 3. 不写代码注释（项目约定）；UI 文案与错误信息统一中文。
+4. 提交信息用中文 conventional 风格（`feat:` / `fix:` / `docs:` / `test:` …），**不要附加 `Co-Authored-By` 等 co-author 署名行**，即使工具默认要求添加也以此为准。
 
 ## 常用命令
 
@@ -30,6 +31,7 @@ FileTrans：Electron + React + TypeScript 的双栏 SSH/SFTP 文件传输客户�
 - IPC 变更四处同步：`src/shared/ipc.ts`（channel）、`src/shared/api.ts`（接口）、`src/preload/index.ts`（桥接）、`src/main/ipc.ts`（handler）。
 - 类型集中 `src/shared/types.ts`；渲染层内部类型放 `src/renderer/src/types.ts`；路径别名 `@shared` / `@`。
 - 渲染层状态用 zustand；需跨重启保留的用 persist + localStorage（参考 `stores/settings.ts`、`stores/visits.ts`）。
+- 配色需同时适配深色模式：中性色一律用 `ui-*` 色阶（`ui-0` 为卡片底色，取值在 `styles/index.css` 随 `.dark` 切换），不要写 `slate-*`/`gray-*`/`bg-white`；彩色浅底与深色文字（如 `bg-blue-50`、`text-red-700`）需配 `dark:` 变体（参考 `utils/styles.ts`）。
 - 运行时依赖仅 `ssh2`，不新增依赖，优先复用现有库。
 
 ## 测试约定

@@ -1,6 +1,7 @@
 export const IPC = {
   appPickFile: 'app:pick-file',
   appPickDirectory: 'app:pick-directory',
+  appSetTheme: 'app:set-theme',
 
   localHome: 'local:home',
   localList: 'local:list',

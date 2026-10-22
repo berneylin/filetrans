@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { findBannedDir } from '@shared/path'
 import { errorMessage } from '../utils/errors'
-import { btn, btnPrimary, dialogInput } from '../utils/styles'
+import { btn, btnPrimary, dialogInput, optionCard, optionCardState } from '../utils/styles'
 import { paneRemoteSessionId, paneSelectedEntries, readPane } from '../pane'
 import { useSettings } from '../stores/settings'
 import { useSync } from '../stores/sync'
@@ -122,10 +122,10 @@ export function SyncDialog() {
 
   return (
     <Modal title="目录同步 (rsync)" onClose={() => setOpen(false)} width={560}>
-      <div className="space-y-2">
-        <label className="flex items-center gap-4">
-          <span className="w-14 text-gray-600">方向</span>
-          <label className="flex cursor-pointer items-center gap-1">
+      <div className="space-y-2.5">
+        <label className="grid grid-cols-[70px_1fr_1fr] items-center gap-2">
+          <span className="text-right text-ui-500">方向</span>
+          <label className={`${optionCard} ${optionCardState(direction === 'upload')}`}>
             <input
               type="radio"
               checked={direction === 'upload'}
@@ -134,18 +134,18 @@ export function SyncDialog() {
             <ArrowUp size={13} className="text-blue-500" />
             本地 → 远程
           </label>
-          <label className="flex cursor-pointer items-center gap-1">
+          <label className={`${optionCard} ${optionCardState(direction === 'download')}`}>
             <input
               type="radio"
               checked={direction === 'download'}
               onChange={() => setDirection('download')}
             />
-            <ArrowDown size={13} className="text-green-600" />
+            <ArrowDown size={13} className="text-emerald-600 dark:text-emerald-400" />
             远程 → 本地
           </label>
         </label>
         <label className="grid grid-cols-[70px_1fr_64px] items-center gap-2">
-          <span className="text-right text-gray-600">本地目录</span>
+          <span className="text-right text-ui-500">本地目录</span>
           <input
             className={dialogInput}
             value={localPath}
@@ -156,7 +156,7 @@ export function SyncDialog() {
           </button>
         </label>
         <label className="grid grid-cols-[70px_1fr_64px] items-center gap-2">
-          <span className="text-right text-gray-600">远程目录</span>
+          <span className="text-right text-ui-500">远程目录</span>
           <input
             className={dialogInput}
             value={remotePath}
@@ -166,11 +166,11 @@ export function SyncDialog() {
             取面板
           </button>
         </label>
-        <div className="text-[11px] text-gray-400">
+        <div className="pl-[78px] text-[11px] text-ui-400">
           源目录内容将镜像到目标目录（等价 rsync src/ dst/），未变化的文件自动跳过。
         </div>
         <label className="grid grid-cols-[70px_1fr] items-start gap-2">
-          <span className="pt-1 text-right text-gray-600">排除规则</span>
+          <span className="pt-1.5 text-right text-ui-500">排除规则</span>
           <textarea
             className={`${dialogInput} h-16 resize-none font-mono`}
             value={exclude}
@@ -178,22 +178,27 @@ export function SyncDialog() {
             placeholder="每行一条 rsync 排除模式，如 .venv*"
           />
         </label>
-        <label className="flex items-start gap-2">
+        <label
+          className={`flex items-start gap-2 rounded-md border px-3 py-2 transition-colors ${
+            deleteExtraneous ? 'border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/10' : 'border-ui-200'
+          }`}
+        >
           <input
             type="checkbox"
+            className="mt-0.5"
             checked={deleteExtraneous}
             onChange={(event) => setDeleteExtraneous(event.target.checked)}
           />
-          <span className="text-gray-700">
+          <span className="text-ui-700">
             删除目标端多余文件（rsync --delete）
             {deleteExtraneous && (
-              <span className="block text-red-600">
+              <span className="block text-red-600 dark:text-red-400">
                 警告：目标端源端不存在的文件将被删除，请谨慎开启！
               </span>
             )}
           </span>
         </label>
-        {error && <div className="text-red-600">{error}</div>}
+        {error && <div className="rounded-md bg-red-50 dark:bg-red-500/10 px-3 py-2 text-red-600 dark:text-red-400">{error}</div>}
         <div className="flex justify-end gap-2 pt-1">
           <button className={btn} onClick={() => setOpen(false)}>
             取消

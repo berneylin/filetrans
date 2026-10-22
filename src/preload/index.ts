@@ -30,6 +30,7 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 const api: FileTransApi = {
   pickFile: (options) => invoke(IPC.appPickFile, options),
   pickDirectory: (options) => invoke(IPC.appPickDirectory, options),
+  setTheme: (mode) => invoke(IPC.appSetTheme, mode),
   getPathForFile: (file) => webUtils.getPathForFile(file),
 
   local: {
