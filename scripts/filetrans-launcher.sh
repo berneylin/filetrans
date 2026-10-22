@@ -2,11 +2,11 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-UNPACKED="$APP_DIR/dist/linux-unpacked"
+UNPACKED="$(ls -dt "$APP_DIR"/dist.noindex/linux*-unpacked 2>/dev/null | head -1 || true)"
 BIN="$UNPACKED/filetrans"
 
-if [ ! -x "$BIN" ]; then
-  echo "未找到打包产物: $BIN" >&2
+if [ -z "$UNPACKED" ] || [ ! -x "$BIN" ]; then
+  echo "未找到打包产物（$APP_DIR/dist.noindex/linux*-unpacked）" >&2
   echo "请先在项目目录运行: npm run package:linux" >&2
   exit 1
 fi

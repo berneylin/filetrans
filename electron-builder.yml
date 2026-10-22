@@ -1,7 +1,7 @@
 appId: com.filetrans.app
 productName: FileTrans
 directories:
-  output: dist
+  output: dist.noindex
   buildResources: build
 files:
   - out/**

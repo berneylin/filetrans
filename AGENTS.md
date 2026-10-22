@@ -6,8 +6,8 @@ FileTrans：Electron + React + TypeScript 的双栏 SSH/SFTP 文件传输客户�
 ## 必守规则
 
 1. **每次代码改动完成后都必须重新打包安装**：按当前系统选择打包命令（两者内部都会先执行 `npm run build`）。
-   - Linux 上运行 `npm run package:linux`（AppImage + deb + linux-unpacked）；桌面入口 `scripts/filetrans-launcher.sh` 直接运行 `dist/linux-unpacked/`，不重新打包改动不会生效。
-   - macOS 上运行 `npm run package:mac`，产物为 `dist/mac-arm64/FileTrans.app` 与 `dist/*.dmg`，安装到 `/Applications`；AppImage 打包工具是 Linux 二进制，在 macOS 上必然失败（error -86），不要在 macOS 上跑 `package:linux`。
+   - Linux 上运行 `npm run package:linux`（AppImage + deb + linux-unpacked），随后 `npm run install:linux` 安装到 `~/.local/opt/FileTrans` 并生成唯一桌面入口；不要直接运行 `dist.noindex/` 里的产物，不重新打包改动不会生效。
+   - macOS 上运行 `npm run package:mac`，随后 `npm run install:mac` 安装到 `/Applications/FileTrans.app`；打包产物目录 `dist.noindex/` 以 `.noindex` 结尾，Spotlight/LaunchServices 不会索引，切勿把产物手动复制到别处运行，否则会出现重复应用；AppImage 打包工具是 Linux 二进制，在 macOS 上必然失败（error -86），不要在 macOS 上跑 `package:linux`。
    - 打包后提醒用户：完全退出 FileTrans 再重启（重启会中断进行中的传输）。
    - 仅当用户明确在跑 `npm run dev`（HMR 开发模式）时才可跳过打包。
 2. 改动后至少运行 `npm run typecheck && npm test`，两者都必须通过。
@@ -23,7 +23,9 @@ FileTrans：Electron + React + TypeScript 的双栏 SSH/SFTP 文件传输客户�
 | 单个测试文件 | `npx vitest run tests/xxx.test.ts` |
 | 构建到 `out/` | `npm run build` |
 | 打包 Linux（AppImage + deb + linux-unpacked） | `npm run package:linux`（仅 Linux 机器） |
+| 安装 Linux（`~/.local/opt/FileTrans`，单一入口） | `npm run install:linux` |
 | 打包 macOS（dmg + mac-arm64） | `npm run package:mac` |
+| 安装 macOS（`/Applications`，单一副本） | `npm run install:mac` |
 | 开发模式（无需打包） | `npm run dev` |
 
 ## 代码约定

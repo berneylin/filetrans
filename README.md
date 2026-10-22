@@ -134,23 +134,34 @@ npm run test:integration
 ## 构建与打包
 
 ```bash
-npm run package:linux   # → dist/FileTrans-0.1.0.AppImage、dist/filetrans_0.1.0_amd64.deb
-npm run package:mac     # → dmg
+npm run package:linux   # → dist.noindex/FileTrans-0.1.0.AppImage、dist.noindex/filetrans_0.1.0_amd64.deb
+npm run package:mac     # → dist.noindex/*.dmg
 ```
+
+打包产物目录为 `dist.noindex/`（macOS 对 `.noindex` 后缀目录不做 Spotlight 索引和 LaunchServices 注册，避免构建产物被当成第二份应用）。**安装走下面的脚本，不要直接运行产物目录里的 app。**
 
 Linux 桌面入口：
 
 ```bash
 node scripts/generate-icon.mjs      # 生成 build/icon.png
 npm run package:linux
-./scripts/install-desktop.sh        # 安装应用列表/桌面图标，Exec 指向 filetrans-launcher.sh
+npm run install:linux               # 安装到 ~/.local/opt/FileTrans，并生成唯一的应用列表入口
 ```
 
-启动器 `scripts/filetrans-launcher.sh` 会：检测到 X11 时加 `--ozone-platform=x11`；当 `chrome-sandbox` 非 root 且无 setuid 时自动加 `--no-sandbox`；`FILETRANS_OZONE=wayland` 可强制 Wayland。
+安装脚本行为：把最新的 `linux*-unpacked` 产物安装到 `~/.local/opt/FileTrans`（先删旧再复制，替换式安装），在 `~/.local/share/applications/filetrans.desktop` 生成唯一的应用入口（X11 下自动加 `--ozone-platform=x11`，`chrome-sandbox` 非 setuid root 时自动 `--no-sandbox`），并清理旧的桌面 `.desktop` 副本。
+
+macOS 安装：
+
+```bash
+npm run package:mac
+npm run install:mac                 # 挂载 dmg，安装到 /Applications/FileTrans.app（替换式，始终只有这一份）
+```
+
+启动器 `scripts/filetrans-launcher.sh` 用于开发期直接运行打包产物：检测到 X11 时加 `--ozone-platform=x11`；当 `chrome-sandbox` 非 root 且无 setuid 时自动加 `--no-sandbox`；`FILETRANS_OZONE=wayland` 可强制 Wayland。
 
 ### 环境注意事项
 
-- AppImage 在部分发行版需要 `libfuse2`；缺失时可直接运行 `dist/linux-unpacked/filetrans`（或经由 launcher）。
+- AppImage 在部分发行版需要 `libfuse2`；缺失时可直接运行 `dist.noindex/linux*-unpacked/filetrans`（或经由 launcher）。
 - 开发机若 `chrome-sandbox` 未 setuid，需 `--no-sandbox`（`npm run dev` 已内置）。
 - 界面整体通过 `webPreferences.zoomFactor = 1.25` 放大。
 
